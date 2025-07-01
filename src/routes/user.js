@@ -3,7 +3,8 @@ const Joi = require("joi");
 const router = express.Router();
 
 const { authenticateToken } = require("../middleware/auth");
-const User = require("../models/User");
+// const User = require("../models/User"); // 数据库版本
+const User = require("../models/MemoryUser"); // 内存存储版本（单例）
 const logger = require("../utils/logger");
 
 // 获取用户信息
@@ -20,11 +21,7 @@ router.get("/profile", authenticateToken, async (req, res, next) => {
           openid: user.openid,
           nickname: user.nickname,
           avatar_url: user.avatar_url,
-          gender: user.gender,
-          country: user.country,
-          province: user.province,
-          city: user.city,
-          language: user.language,
+          phone_number: user.phone_number,
           login_count: user.login_count,
           last_login_at: user.last_login_at,
           created_at: user.created_at,
@@ -41,11 +38,12 @@ router.get("/profile", authenticateToken, async (req, res, next) => {
 const updateProfileSchema = Joi.object({
   nickname: Joi.string().max(50).optional(),
   avatar_url: Joi.string().uri().optional(),
-  gender: Joi.number().integer().min(0).max(2).optional(),
-  country: Joi.string().max(50).optional(),
-  province: Joi.string().max(50).optional(),
-  city: Joi.string().max(50).optional(),
-  language: Joi.string().max(20).optional(),
+  phone_number: Joi.string()
+    .pattern(/^1[3-9]\d{9}$/)
+    .optional()
+    .messages({
+      "string.pattern.base": "手机号格式不正确",
+    }),
 });
 
 // 更新用户信息
@@ -78,11 +76,7 @@ router.put("/profile", authenticateToken, async (req, res, next) => {
           openid: user.openid,
           nickname: user.nickname,
           avatar_url: user.avatar_url,
-          gender: user.gender,
-          country: user.country,
-          province: user.province,
-          city: user.city,
-          language: user.language,
+          phone_number: user.phone_number,
           updated_at: user.updated_at,
         },
       },
@@ -151,15 +145,7 @@ router.delete("/account", authenticateToken, async (req, res, next) => {
 
 // 计算用户资料完整度
 function calculateProfileCompleteness(user) {
-  const fields = [
-    "nickname",
-    "avatar_url",
-    "gender",
-    "country",
-    "province",
-    "city",
-    "language",
-  ];
+  const fields = ["nickname", "avatar_url", "phone_number"];
   const filledFields = fields.filter((field) => {
     const value = user[field];
     return value !== null && value !== undefined && value !== "" && value !== 0;

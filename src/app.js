@@ -17,6 +17,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || "0.0.0.0"; // 监听所有网络接口
 
+// 信任代理，支持 ngrok/x-forwarded-for
+app.set("trust proxy", true);
+
 // 中间件配置
 app.use(helmet()); // 安全头
 app.use(compression()); // 压缩响应
@@ -103,9 +106,11 @@ app.get("/", (req, res) => {
       health: "/health",
       auth: {
         login: "POST /api/auth/login",
+        registerWithInviteCode: "POST /api/auth/registerWithInviteCode",
+        validateInviteCode: "POST /api/auth/validateInviteCode",
         verify: "POST /api/auth/verify",
-        refresh: "POST /api/auth/refresh",
         updateProfile: "POST /api/auth/updateProfile",
+        inviteStats: "GET /api/auth/inviteStats",
       },
       payment: {
         create: "POST /api/payment/create",
@@ -133,9 +138,41 @@ app.get("/api", (req, res) => {
         微信登录: {
           method: "POST",
           url: "/api/auth/login",
-          description: "使用微信 code 进行登录",
+          description: "使用微信 code 进行登录，返回新用户标识或直接登录",
           body: {
             code: "微信登录 code",
+            userInfo: "用户信息（可选）",
+            inviteCode: "邀请码（可选）",
+          },
+          response: {
+            新用户: "返回 isNewUser: true, openid, session_key",
+            已注册用户: "返回 isNewUser: false, token, userInfo, inviteCode",
+          },
+        },
+        邀请码注册: {
+          method: "POST",
+          url: "/api/auth/registerWithInviteCode",
+          description: "通过邀请码注册新用户",
+          body: {
+            openid: "用户 openid",
+            userInfo: {
+              nickName: "用户昵称",
+              avatarUrl: "头像地址",
+              gender: "性别 0-未知 1-男 2-女",
+              country: "国家",
+              province: "省份",
+              city: "城市",
+              language: "语言",
+            },
+            inviteCode: "邀请码（6位字母数字）",
+          },
+        },
+        验证邀请码: {
+          method: "POST",
+          url: "/api/auth/validateInviteCode",
+          description: "验证邀请码是否有效",
+          body: {
+            inviteCode: "邀请码",
           },
         },
         更新用户资料: {
@@ -161,6 +198,14 @@ app.get("/api", (req, res) => {
           method: "POST",
           url: "/api/auth/verify",
           description: "验证 JWT Token 是否有效",
+          headers: {
+            Authorization: "Bearer your_jwt_token",
+          },
+        },
+        邀请统计: {
+          method: "GET",
+          url: "/api/auth/inviteStats",
+          description: "获取用户邀请码和邀请统计信息",
           headers: {
             Authorization: "Bearer your_jwt_token",
           },

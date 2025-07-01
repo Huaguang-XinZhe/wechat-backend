@@ -45,10 +45,72 @@ router.get("/users", (req, res) => {
         login_count: user.login_count,
         last_login_at: user.last_login_at,
         created_at: user.created_at,
+        invite_code: user.invite_code,
+        invite_from: user.invite_from,
+        inviter_id: user.inviter_id,
       })),
       total: users.length,
     },
   });
+});
+
+// 获取邀请码统计信息（仅开发环境）
+router.get("/invite-codes", (req, res) => {
+  if (process.env.NODE_ENV !== "development") {
+    return res.status(403).json({
+      success: false,
+      message: "此接口仅在开发环境可用",
+      code: 403,
+    });
+  }
+
+  const inviteCodeStats = User.getInviteCodeStats();
+
+  res.json({
+    success: true,
+    message: "邀请码统计信息",
+    data: inviteCodeStats,
+  });
+});
+
+// 测试邀请码验证（仅开发环境）
+router.post("/test-invite-code", async (req, res) => {
+  if (process.env.NODE_ENV !== "development") {
+    return res.status(403).json({
+      success: false,
+      message: "此接口仅在开发环境可用",
+      code: 403,
+    });
+  }
+
+  const { inviteCode } = req.body;
+
+  if (!inviteCode) {
+    return res.status(400).json({
+      success: false,
+      message: "邀请码不能为空",
+      code: 400,
+    });
+  }
+
+  try {
+    const validation = await User.validateInviteCode(inviteCode);
+
+    res.json({
+      success: true,
+      message: "邀请码验证结果",
+      data: {
+        inviteCode,
+        ...validation,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "验证失败",
+      error: error.message,
+    });
+  }
 });
 
 // 清空所有数据（仅开发环境）

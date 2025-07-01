@@ -31,12 +31,28 @@ class WechatService {
         this.appSecret === "your_wechat_app_secret"
       ) {
         logger.info("检测到测试环境，使用模拟微信登录");
-        // 返回模拟数据
+        // 返回模拟数据 - 基于 code 生成一致的 openid
+        const hash = require("crypto")
+          .createHash("md5")
+          .update(code)
+          .digest("hex");
         return {
-          openid: `mock_openid_${Date.now()}_${Math.random()
-            .toString(36)
-            .substr(2, 9)}`,
+          openid: `mock_openid_${hash.substring(0, 16)}`,
           session_key: `mock_session_key_${Date.now()}`,
+          unionid: null,
+        };
+      }
+
+      // 如果是测试 code，直接返回模拟数据，避免调用真实微信接口
+      if (code.startsWith("test_")) {
+        logger.info("检测到测试 code，使用模拟数据");
+        const hash = require("crypto")
+          .createHash("md5")
+          .update(code)
+          .digest("hex");
+        return {
+          openid: `test_openid_${hash.substring(0, 16)}`,
+          session_key: `test_session_key_${Date.now()}`,
           unionid: null,
         };
       }
@@ -66,15 +82,70 @@ class WechatService {
       // 如果是网络错误且在开发环境，提供降级方案
       if (process.env.NODE_ENV === "development") {
         logger.warn("开发环境降级处理，使用模拟数据");
+        const hash = require("crypto")
+          .createHash("md5")
+          .update(code)
+          .digest("hex");
         return {
-          openid: `fallback_openid_${Date.now()}_${Math.random()
-            .toString(36)
-            .substr(2, 9)}`,
+          openid: `fallback_openid_${hash.substring(0, 16)}`,
           session_key: `fallback_session_key_${Date.now()}`,
           unionid: null,
         };
       }
       throw error;
+    }
+  }
+
+  // 解密手机号数据
+  decryptData(sessionKey, encryptedData, iv) {
+    try {
+      // 检查是否为测试环境
+      if (
+        !this.appId ||
+        this.appId === "your_wechat_app_id" ||
+        sessionKey.startsWith("mock_") ||
+        sessionKey.startsWith("fallback_")
+      ) {
+        logger.info("检测到测试环境，返回模拟手机号数据");
+        return {
+          phoneNumber: "13800138000",
+          purePhoneNumber: "13800138000",
+          countryCode: "86",
+          watermark: {
+            timestamp: Date.now(),
+            appid: this.appId || "mock_app_id",
+          },
+        };
+      }
+
+      // Base64 解码
+      const sessionKeyBuffer = Buffer.from(sessionKey, "base64");
+      const encryptedBuffer = Buffer.from(encryptedData, "base64");
+      const ivBuffer = Buffer.from(iv, "base64");
+
+      // AES-128-CBC 解密
+      const decipher = crypto.createDecipheriv(
+        "aes-128-cbc",
+        sessionKeyBuffer,
+        ivBuffer
+      );
+      decipher.setAutoPadding(true);
+
+      let decrypted = decipher.update(encryptedBuffer, null, "utf8");
+      decrypted += decipher.final("utf8");
+
+      // 解析 JSON
+      const phoneData = JSON.parse(decrypted);
+
+      // 验证 appId
+      if (phoneData.watermark && phoneData.watermark.appid !== this.appId) {
+        throw new Error("appId 不匹配，数据可能被篡改");
+      }
+
+      return phoneData;
+    } catch (error) {
+      logger.error("解密手机号数据失败:", error);
+      throw new Error("解密手机号数据失败");
     }
   }
 

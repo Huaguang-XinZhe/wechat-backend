@@ -6,9 +6,9 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
-    "start:simple": "node start.js",
     "test": "jest",
-    "test:api": "node test-api.js",
+    "test:invite": "node test-invite-api.js",
+    "test:phone": "node test-phone-login-api.js",
     "docker:build": "docker build -t wechat-backend .",
     "docker:run": "docker run -p 3000:3000 --env-file .env wechat-backend"
   },

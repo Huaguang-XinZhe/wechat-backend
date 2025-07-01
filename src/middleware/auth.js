@@ -1,6 +1,6 @@
 const jwt = require("jsonwebtoken");
 // const User = require("../models/User"); // 数据库版本
-const User = require("../models/MemoryUser"); // 内存存储版本
+const User = require("../models/MemoryUser"); // 内存存储版本（单例）
 const logger = require("../utils/logger");
 
 // JWT 验证中间件
@@ -30,12 +30,8 @@ async function authenticateToken(req, res, next) {
       });
     }
 
-    // 将用户信息添加到请求对象
-    req.user = {
-      userId: user.id,
-      openid: user.openid,
-      nickname: user.nickname,
-    };
+    // 将完整用户对象添加到请求对象
+    req.user = user;
     next();
   } catch (error) {
     logger.error("JWT 验证失败:", error);
@@ -74,11 +70,7 @@ async function optionalAuth(req, res, next) {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       const user = await User.findByPk(decoded.userId);
       if (user) {
-        req.user = {
-          userId: user.id,
-          openid: user.openid,
-          nickname: user.nickname,
-        };
+        req.user = user;
       }
     }
 

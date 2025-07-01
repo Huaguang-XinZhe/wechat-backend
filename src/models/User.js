@@ -25,6 +25,11 @@ const User = sequelize.define(
       allowNull: false,
       comment: "微信会话密钥",
     },
+    phone_number: {
+      type: DataTypes.STRING(20),
+      allowNull: true,
+      comment: "手机号",
+    },
     nickname: {
       type: DataTypes.STRING(100),
       allowNull: true,
@@ -34,32 +39,6 @@ const User = sequelize.define(
       type: DataTypes.STRING(500),
       allowNull: true,
       comment: "用户头像地址",
-    },
-    gender: {
-      type: DataTypes.TINYINT,
-      allowNull: true,
-      defaultValue: 0,
-      comment: "性别：0-未知，1-男，2-女",
-    },
-    country: {
-      type: DataTypes.STRING(50),
-      allowNull: true,
-      comment: "国家",
-    },
-    province: {
-      type: DataTypes.STRING(50),
-      allowNull: true,
-      comment: "省份",
-    },
-    city: {
-      type: DataTypes.STRING(50),
-      allowNull: true,
-      comment: "城市",
-    },
-    language: {
-      type: DataTypes.STRING(20),
-      allowNull: true,
-      comment: "语言",
     },
     last_login_at: {
       type: DataTypes.DATE,
@@ -87,6 +66,9 @@ const User = sequelize.define(
       },
       {
         fields: ["unionid"],
+      },
+      {
+        fields: ["phone_number"],
       },
       {
         fields: ["last_login_at"],
