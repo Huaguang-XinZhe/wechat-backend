@@ -3,15 +3,19 @@ const cors = require("cors");
 const helmet = require("helmet");
 const compression = require("compression");
 const rateLimit = require("express-rate-limit");
+const morgan = require("morgan");
 require("dotenv").config();
 
 const logger = require("./utils/logger");
 const errorHandler = require("./middleware/errorHandler");
 // const { connectDB } = require("./config/database"); // 暂时禁用数据库
+const { testLegacyConnection } = require("./config/legacyDatabase"); // 引入老系统数据库连接测试
 const authRoutes = require("./routes/auth");
-const paymentRoutes = require("./routes/payment");
+const paymentSimpleRoutes = require("./routes/payment-simple"); // 使用简化版支付路由
 const userRoutes = require("./routes/user");
 const debugRoutes = require("./routes/debug");
+const authLegacyRoutes = require("./routes/auth-legacy"); // 添加老系统兼容路由
+const testRoutes = require("./routes/test"); // 添加测试路由
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -89,8 +93,8 @@ app.get("/health", (req, res) => {
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     environment: process.env.NODE_ENV,
-    database: "disabled", // 标记数据库状态
-    mode: "memory-only", // 当前运行模式
+    database: "legacy-compatible", // 标记数据库状态
+    mode: "legacy-adapter", // 当前运行模式
   });
 });
 
@@ -99,13 +103,14 @@ app.get("/", (req, res) => {
   res.json({
     message: "微信小程序后端服务",
     version: "1.0.0",
-    mode: "开发模式 (内存存储)",
-    database: "暂时禁用",
+    mode: "老系统兼容模式",
+    database: "使用老系统数据库",
     timestamp: new Date().toISOString(),
     endpoints: {
       health: "/health",
       auth: {
         login: "POST /api/auth/login",
+        phoneLogin: "POST /api/auth/phoneLogin",
         registerWithInviteCode: "POST /api/auth/registerWithInviteCode",
         validateInviteCode: "POST /api/auth/validateInviteCode",
         verify: "POST /api/auth/verify",
@@ -121,6 +126,13 @@ app.get("/", (req, res) => {
         profile: "GET /api/user/profile",
         update: "PUT /api/user/profile",
       },
+      老系统兼容API: {
+        phoneLogin: "POST /api/legacy/auth/phoneLogin",
+        validateInviteCode: "POST /api/legacy/auth/validateInviteCode",
+        verify: "POST /api/legacy/auth/verify",
+        updateProfile: "POST /api/legacy/auth/updateProfile",
+        inviteStats: "GET /api/legacy/auth/inviteStats",
+      },
     },
   });
 });
@@ -130,8 +142,8 @@ app.get("/api", (req, res) => {
   res.json({
     message: "微信小程序 API 文档",
     version: "1.0.0",
-    mode: "内存存储模式",
-    note: "当前使用内存存储，重启服务后数据会丢失",
+    mode: "老系统兼容模式",
+    note: "已对接老系统数据库",
     baseURL: `http://localhost:${PORT}/api`,
     endpoints: {
       认证相关: {
@@ -147,6 +159,17 @@ app.get("/api", (req, res) => {
           response: {
             新用户: "返回 isNewUser: true, openid, session_key",
             已注册用户: "返回 isNewUser: false, token, userInfo, inviteCode",
+          },
+        },
+        手机号登录: {
+          method: "POST",
+          url: "/api/auth/phoneLogin",
+          description: "使用微信手机号一键登录",
+          body: {
+            code: "微信登录 code",
+            encryptedData: "加密的手机号数据",
+            iv: "加密算法的初始向量",
+            inviteCode: "邀请码（新用户必需）",
           },
         },
         邀请码注册: {
@@ -240,15 +263,32 @@ app.get("/api", (req, res) => {
           },
         },
       },
+      老系统兼容API: {
+        手机号登录: {
+          method: "POST",
+          url: "/api/legacy/auth/phoneLogin",
+          description: "兼容老系统的手机号登录API",
+          body: {
+            code: "微信登录 code",
+            encryptedData: "加密的手机号数据",
+            iv: "加密算法的初始向量",
+            inviteCode: "邀请码（新用户必需）",
+          },
+        },
+      },
     },
   });
 });
 
 // API 路由
 app.use("/api/auth", authRoutes);
-app.use("/api/payment", paymentRoutes);
+app.use("/api/payment", paymentSimpleRoutes); // 使用简化版支付路由
 app.use("/api/user", userRoutes);
 app.use("/api/debug", debugRoutes);
+// 添加老系统兼容路由
+app.use("/api/legacy/auth", authLegacyRoutes);
+// 添加测试路由
+app.use("/api/test", testRoutes);
 
 // 404 处理
 app.use("*", (req, res) => {
@@ -265,15 +305,26 @@ app.use(errorHandler);
 // 启动服务器
 async function startServer() {
   try {
-    // 暂时跳过数据库连接
-    // await connectDB();
-    logger.info("🚀 服务启动模式：内存存储（无数据库）");
+    // 测试老系统数据库连接
+    const legacyDbConnected = await testLegacyConnection();
+
+    logger.info("🚀 服务启动模式：老系统兼容模式");
+
+    if (legacyDbConnected) {
+      logger.info("✅ 老系统数据库连接成功");
+    } else {
+      logger.warn("⚠️ 老系统数据库连接失败，将使用内存模式");
+    }
 
     // 启动服务器 - 监听所有网络接口
     app.listen(PORT, HOST, () => {
       logger.info(`✅ 服务器启动成功，地址：${HOST}:${PORT}`);
       logger.info(`🌍 环境：${process.env.NODE_ENV}`);
-      logger.info(`💾 存储模式：内存存储（重启后数据丢失）`);
+      logger.info(
+        `💾 存储模式：${
+          legacyDbConnected ? "老系统数据库" : "内存存储（重启后数据丢失）"
+        }`
+      );
       logger.info(`🏥 健康检查：http://localhost:${PORT}/health`);
       logger.info(`📖 API 文档：http://localhost:${PORT}/api`);
 

@@ -1,90 +1,203 @@
-const jwt = require("jsonwebtoken");
 // const User = require("../models/User"); // 数据库版本
-const User = require("../models/MemoryUser"); // 内存存储版本（单例）
+const JwtService = require("../services/jwtService");
+const UserAdapterService = require("../services/userAdapterService");
 const logger = require("../utils/logger");
+const jwt = require("jsonwebtoken");
 
-// JWT 验证中间件
-async function authenticateToken(req, res, next) {
+/**
+ * 认证中间件
+ * 验证 JWT token 并加载用户
+ */
+const authMiddleware = async (req, res, next) => {
   try {
-    const authHeader = req.headers["authorization"];
-    const token = authHeader && authHeader.split(" ")[1]; // Bearer TOKEN
+    const token = JwtService.getTokenFromRequest(req);
 
     if (!token) {
       return res.status(401).json({
         success: false,
-        message: "访问令牌缺失",
+        message: "未提供认证 token",
         code: 401,
       });
     }
 
-    // 验证 JWT
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    // 验证 token
+    try {
+      const decoded = JwtService.verifyToken(token);
 
-    // 查找用户
-    const user = await User.findByPk(decoded.userId);
-    if (!user) {
+      // 从 payload 中获取 openid
+      const openid = decoded.sub;
+      logger.info(`从 JWT 解析的 openid: ${openid}`);
+
+      if (!openid) {
+        return res.status(401).json({
+          success: false,
+          message: "无效的 token",
+          code: 401,
+        });
+      }
+
+      // 查找用户
+      logger.info(`准备查找用户，openid: ${openid}`);
+      const user = await UserAdapterService.findUserByOpenid(openid);
+
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          message: "用户不存在",
+          code: 401,
+        });
+      }
+
+      // 将用户对象挂载到请求上
+      req.user = user;
+
+      next();
+    } catch (tokenError) {
+      if (tokenError.name === "TokenExpiredError") {
+        return res.status(401).json({
+          success: false,
+          message: "token 已过期",
+          code: 401,
+        });
+      }
+
       return res.status(401).json({
         success: false,
-        message: "用户不存在",
+        message: "无效的 token",
         code: 401,
       });
     }
-
-    // 将完整用户对象添加到请求对象
-    req.user = user;
-    next();
   } catch (error) {
-    logger.error("JWT 验证失败:", error);
-
-    if (error.name === "TokenExpiredError") {
-      return res.status(401).json({
-        success: false,
-        message: "访问令牌已过期",
-        code: 401,
-      });
-    }
-
-    if (error.name === "JsonWebTokenError") {
-      return res.status(401).json({
-        success: false,
-        message: "无效的访问令牌",
-        code: 401,
-      });
-    }
-
+    logger.error("认证中间件错误:", error);
     return res.status(500).json({
       success: false,
-      message: "身份验证失败",
+      message: "服务器内部错误",
       code: 500,
     });
   }
-}
+};
 
-// 可选身份验证中间件（不强制要求登录）
-async function optionalAuth(req, res, next) {
+/**
+ * 可选身份验证中间件（不强制要求登录）
+ */
+const optionalAuth = async (req, res, next) => {
   try {
-    const authHeader = req.headers["authorization"];
-    const token = authHeader && authHeader.split(" ")[1];
+    const token = JwtService.getTokenFromRequest(req);
 
     if (token) {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const user = await User.findByPk(decoded.userId);
-      if (user) {
-        req.user = user;
+      try {
+        const decoded = JwtService.verifyToken(token);
+        const openid = decoded.sub;
+
+        if (openid) {
+          const user = await UserAdapterService.findUserByOpenid(openid);
+          if (user) {
+            req.user = user;
+          }
+        }
+      } catch (error) {
+        // 可选认证失败时继续执行，但不设置 req.user
+        logger.debug("可选认证失败:", error.message);
       }
     }
 
     next();
   } catch (error) {
     // 可选认证失败时继续执行，但不设置 req.user
+    logger.debug("可选认证处理错误:", error);
     next();
   }
-}
-
-module.exports = {
-  authenticateToken,
-  optionalAuth,
 };
 
-// 默认导出主要的认证中间件
-module.exports.default = authenticateToken;
+/**
+ * 不验证签名的认证中间件（仅用于测试）
+ * 只解析 token，不验证签名
+ */
+const noVerifyAuthMiddleware = async (req, res, next) => {
+  try {
+    const token = JwtService.getTokenFromRequest(req);
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: "未提供认证 token",
+        code: 401,
+      });
+    }
+
+    try {
+      // 直接解码 token，不验证签名
+      const decoded = jwt.decode(token);
+      logger.debug(`Token 解析结果: ${JSON.stringify(decoded)}`);
+
+      if (!decoded) {
+        return res.status(401).json({
+          success: false,
+          message: "无法解析 token",
+          code: 401,
+        });
+      }
+
+      // 检查 token 是否过期
+      if (decoded.exp) {
+        const now = Math.floor(Date.now() / 1000);
+        if (decoded.exp < now) {
+          return res.status(401).json({
+            success: false,
+            message: "token 已过期",
+            code: 401,
+          });
+        }
+      }
+
+      // 从 payload 中获取 openid
+      const openid = decoded.sub;
+      logger.debug(`从 token 获取的 openid: ${openid}`);
+
+      if (!openid) {
+        return res.status(401).json({
+          success: false,
+          message: "无效的 token: 没有找到 openid",
+          code: 401,
+        });
+      }
+
+      // 查找用户
+      logger.debug(`开始查找用户: ${openid}`);
+      const user = await UserAdapterService.findUserByOpenid(openid);
+      logger.debug(`查找用户结果: ${user ? "找到用户" : "用户不存在"}`);
+
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          message: "用户不存在",
+          code: 401,
+        });
+      }
+
+      // 将用户对象挂载到请求上
+      req.user = user;
+      next();
+    } catch (error) {
+      logger.error("Token 解析失败:", error);
+      return res.status(401).json({
+        success: false,
+        message: `无效的 token: ${error.message}`,
+        code: 401,
+      });
+    }
+  } catch (error) {
+    logger.error("认证中间件错误:", error);
+    return res.status(500).json({
+      success: false,
+      message: "服务器内部错误",
+      code: 500,
+    });
+  }
+};
+
+module.exports = {
+  authMiddleware,
+  optionalAuth,
+  noVerifyAuthMiddleware,
+};

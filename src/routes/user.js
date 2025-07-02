@@ -2,34 +2,90 @@ const express = require("express");
 const Joi = require("joi");
 const router = express.Router();
 
-const { authenticateToken } = require("../middleware/auth");
-// const User = require("../models/User"); // 数据库版本
-const User = require("../models/MemoryUser"); // 内存存储版本（单例）
+const UserAdapterService = require("../services/userAdapterService");
+const { authMiddleware, optionalAuth } = require("../middleware/auth");
 const logger = require("../utils/logger");
 
-// 获取用户信息
-router.get("/profile", authenticateToken, async (req, res, next) => {
+// 获取用户资料 schema
+const getUserProfileSchema = Joi.object({
+  userId: Joi.number().integer().positive().required().messages({
+    "number.base": "用户ID必须是数字",
+    "number.integer": "用户ID必须是整数",
+    "number.positive": "用户ID必须是正数",
+    "any.required": "用户ID是必需的",
+  }),
+});
+
+// 获取当前用户资料
+router.get("/profile", authMiddleware, async (req, res, next) => {
   try {
     const user = req.user;
 
     res.json({
       success: true,
-      message: "获取用户信息成功",
+      message: "获取用户资料成功",
       data: {
         user: {
           id: user.id,
-          openid: user.openid,
           nickname: user.nickname,
           avatar_url: user.avatar_url,
           phone_number: user.phone_number,
-          login_count: user.login_count,
-          last_login_at: user.last_login_at,
-          created_at: user.created_at,
         },
       },
     });
   } catch (error) {
-    logger.error("获取用户信息失败:", error);
+    logger.error("获取用户资料失败:", error);
+    next(error);
+  }
+});
+
+// 获取指定用户资料
+router.get("/:userId", optionalAuth, async (req, res, next) => {
+  try {
+    // 验证参数
+    const { error, value } = getUserProfileSchema.validate({
+      userId: parseInt(req.params.userId, 10),
+    });
+
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.details[0].message,
+        code: 400,
+      });
+    }
+
+    const { userId } = value;
+
+    // 查找用户
+    const user = await UserAdapterService.findUserById(userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "用户不存在",
+        code: 404,
+      });
+    }
+
+    // 如果是自己请求自己的资料，返回完整信息
+    const isSelf = req.user && req.user.id === userId;
+
+    res.json({
+      success: true,
+      message: "获取用户资料成功",
+      data: {
+        user: {
+          id: user.id,
+          nickname: user.nickname,
+          avatar_url: user.avatar_url,
+          // 只有用户自己查看时才返回手机号
+          phone_number: isSelf ? user.phone_number : undefined,
+        },
+      },
+    });
+  } catch (error) {
+    logger.error("获取指定用户资料失败:", error);
     next(error);
   }
 });
@@ -47,7 +103,7 @@ const updateProfileSchema = Joi.object({
 });
 
 // 更新用户信息
-router.put("/profile", authenticateToken, async (req, res, next) => {
+router.put("/profile", authMiddleware, async (req, res, next) => {
   try {
     // 验证请求参数
     const { error, value } = updateProfileSchema.validate(req.body);
@@ -88,7 +144,7 @@ router.put("/profile", authenticateToken, async (req, res, next) => {
 });
 
 // 获取用户统计信息
-router.get("/stats", authenticateToken, async (req, res, next) => {
+router.get("/stats", authMiddleware, async (req, res, next) => {
   try {
     const user = req.user;
 
@@ -119,7 +175,7 @@ router.get("/stats", authenticateToken, async (req, res, next) => {
 });
 
 // 删除用户账号
-router.delete("/account", authenticateToken, async (req, res, next) => {
+router.delete("/account", authMiddleware, async (req, res, next) => {
   try {
     const user = req.user;
 

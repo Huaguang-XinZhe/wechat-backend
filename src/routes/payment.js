@@ -199,7 +199,7 @@ router.get("/orders", authenticateToken, async (req, res, next) => {
 });
 
 // 微信支付回调通知
-router.post("/notify", async (req, res, next) => {
+router.post("/notify", (req, res) => {
   try {
     // 获取原始XML数据
     let xmlData = "";

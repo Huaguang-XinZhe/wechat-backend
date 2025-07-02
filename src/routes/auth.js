@@ -1,55 +1,28 @@
 const express = require("express");
-const jwt = require("jsonwebtoken");
 const Joi = require("joi");
 const router = express.Router();
 
-// const User = require("../models/User"); // 数据库版本
-const User = require("../models/MemoryUser"); // 内存存储版本（单例）
+const UserAdapterService = require("../services/userAdapterService");
 const wechatService = require("../services/wechatService");
+const {
+  authMiddleware,
+  noVerifyAuthMiddleware,
+} = require("../middleware/auth");
 const logger = require("../utils/logger");
-const { authenticateToken } = require("../middleware/auth");
+const LegacyApiService = require("../services/legacyApiService");
 
-// 登录验证 schema - 简化版本
+// 登录验证 schema
 const loginSchema = Joi.object({
-  code: Joi.string().required().messages({
-    "string.empty": "code 不能为空",
-    "any.required": "code 是必需的",
-  }),
-  inviteCode: Joi.string().optional(), // 可选的邀请码
+  code: Joi.string().required(),
+  inviteCode: Joi.string().allow("", null),
 });
 
 // 手机号登录 schema
 const phoneLoginSchema = Joi.object({
-  code: Joi.string().required().messages({
-    "string.empty": "code 不能为空",
-    "any.required": "code 是必需的",
-  }),
-  encryptedData: Joi.string().required().messages({
-    "string.empty": "encryptedData 不能为空",
-    "any.required": "encryptedData 是必需的",
-  }),
-  iv: Joi.string().required().messages({
-    "string.empty": "iv 不能为空",
-    "any.required": "iv 是必需的",
-  }),
-  inviteCode: Joi.string().optional(), // 可选的邀请码
-});
-
-// 邀请码注册 schema - 简化版本
-const registerWithInviteCodeSchema = Joi.object({
-  openid: Joi.string().required().messages({
-    "string.empty": "openid 不能为空",
-    "any.required": "openid 是必需的",
-  }),
-  nickname: Joi.string().optional(),
-  avatar_url: Joi.string().optional(),
-  phone_number: Joi.string()
-    .pattern(/^1[3-9]\d{9}$/)
-    .optional(),
-  inviteCode: Joi.string().required().messages({
-    "string.empty": "邀请码不能为空",
-    "any.required": "邀请码是必需的",
-  }),
+  code: Joi.string().required(),
+  encryptedData: Joi.string().required(),
+  iv: Joi.string().required(),
+  inviteCode: Joi.string().allow("", null),
 });
 
 // 邀请码验证 schema
@@ -60,7 +33,7 @@ const validateInviteCodeSchema = Joi.object({
   }),
 });
 
-// 用户资料更新 schema - 简化版本
+// 用户资料更新 schema
 const updateProfileSchema = Joi.object({
   nickname: Joi.string().optional(),
   avatar_url: Joi.string().optional(),
@@ -69,20 +42,6 @@ const updateProfileSchema = Joi.object({
     .optional(),
 });
 
-// 生成 JWT token
-function generateToken(user) {
-  return jwt.sign(
-    {
-      userId: user.id,
-      openid: user.openid,
-    },
-    process.env.JWT_SECRET,
-    {
-      expiresIn: process.env.JWT_EXPIRES_IN || "7d",
-    }
-  );
-}
-
 // 格式化用户信息返回数据
 function formatUserResponse(user) {
   return {
@@ -90,301 +49,264 @@ function formatUserResponse(user) {
     nickname: user.nickname,
     avatar_url: user.avatar_url,
     phone_number: user.phone_number,
-    login_count: user.login_count,
+    login_count: user.login_count || 0,
     last_login_at: user.last_login_at,
   };
 }
 
-// 微信登录 - 支持邀请码参数
+// 微信登录
 router.post("/login", async (req, res, next) => {
   try {
-    // 验证请求参数
-    const { error, value } = loginSchema.validate(req.body);
-    if (error) {
+    const { code, inviteCode } = req.body;
+
+    if (!code) {
       return res.status(400).json({
+        success: false,
+        message: "缺少必要参数",
         code: 400,
-        message: error.details[0].message,
-        data: null,
       });
     }
 
-    const { code, inviteCode } = value;
-
-    // 通过 code 获取 openid 和 session_key
+    // 通过 code 获取微信用户信息
     const wechatAuth = await wechatService.code2Session(code);
-
-    // 查找现有用户
-    let user = await User.findByOpenid(wechatAuth.openid);
-
-    if (user) {
-      // 已注册用户，更新登录信息
-      const updateData = {
-        session_key: wechatAuth.session_key,
-        last_login_at: new Date(),
-      };
-
-      await user.update(updateData);
-      await User.updateLoginInfo(wechatAuth.openid);
-
-      // 生成 token
-      const token = generateToken(user);
-
-      logger.info(`用户登录成功: ${user.openid}`);
-
-      return res.json({
-        code: 200,
-        message: "登录成功",
-        data: {
-          isNewUser: false,
-          token,
-          userInfo: formatUserResponse(user),
-          inviteCode: user.invite_code,
-          inviteFrom: user.invite_from,
-        },
-      });
-    } else {
-      // 新用户
-      logger.info(`新用户需要注册: ${wechatAuth.openid}`);
-
-      return res.json({
-        code: 200,
-        message: "新用户",
-        data: {
-          isNewUser: true,
-          needRegistration: true,
-        },
-      });
-    }
-  } catch (error) {
-    logger.error("用户登录失败:", error);
-
-    if (error.message.includes("微信接口错误")) {
+    if (!wechatAuth || !wechatAuth.openid) {
+      logger.error("获取微信用户信息失败:", wechatAuth);
       return res.status(400).json({
+        success: false,
+        message: "获取微信用户信息失败",
         code: 400,
-        message: "微信登录验证失败，请重试",
-        data: null,
       });
     }
 
-    next(error);
-  }
-});
+    // 查找或创建用户
+    let user = await UserAdapterService.findUserByOpenid(wechatAuth.openid);
 
-// 手机号一键登录
-router.post("/phoneLogin", async (req, res, next) => {
-  try {
-    // 验证请求参数
-    const { error, value } = phoneLoginSchema.validate(req.body);
-    if (error) {
-      return res.status(400).json({
-        code: 400,
-        message: error.details[0].message,
-        data: null,
-      });
-    }
-
-    const { code, encryptedData, iv, inviteCode } = value;
-
-    // 通过 code 获取 openid 和 session_key
-    const wechatAuth = await wechatService.code2Session(code);
-
-    // 解密手机号信息
-    const phoneInfo = await wechatService.decryptData(
-      wechatAuth.session_key,
-      encryptedData,
-      iv
-    );
-
-    if (!phoneInfo || !phoneInfo.phoneNumber) {
-      return res.status(400).json({
-        code: 400,
-        message: "获取手机号失败",
-        data: null,
-      });
-    }
-
-    // 查找现有用户
-    let user = await User.findByOpenid(wechatAuth.openid);
-
-    if (user) {
-      // 已注册用户，更新登录信息和手机号
-      const updateData = {
-        session_key: wechatAuth.session_key,
-        last_login_at: new Date(),
-        phone_number: phoneInfo.phoneNumber,
-      };
-
-      await user.update(updateData);
-      await User.updateLoginInfo(wechatAuth.openid);
-
-      // 生成 token
-      const token = generateToken(user);
-
-      logger.info(
-        `用户手机号登录成功: ${user.openid}, 手机号: ${phoneInfo.phoneNumber}`
-      );
-
-      return res.json({
-        code: 200,
-        message: "登录成功",
-        data: {
-          isNewUser: false,
-          token,
-          userInfo: formatUserResponse(user),
-          inviteCode: user.invite_code,
-          inviteFrom: user.invite_from,
-        },
-      });
-    } else {
-      // 新用户，需要注册
-      if (!inviteCode) {
-        return res.status(400).json({
-          code: 400,
-          message: "新用户注册需要邀请码",
-          data: {
-            isNewUser: true,
-            needInviteCode: true,
-          },
-        });
-      }
-
-      // 验证邀请码
-      const validation = await User.validateInviteCode(inviteCode);
-      if (!validation.valid) {
-        return res.status(400).json({
-          code: 400,
-          message: validation.isSystemCode
-            ? "系统邀请码已被使用"
-            : "邀请码无效",
-          data: null,
-        });
-      }
-
-      // 创建用户
-      const defaultNickname = `用户${wechatAuth.openid.slice(-6)}`;
-
-      const userData = {
+    if (!user) {
+      // 处理邀请码
+      let userData = {
         openid: wechatAuth.openid,
-        session_key: wechatAuth.session_key,
-        nickname: defaultNickname,
-        avatar_url: "",
-        phone_number: phoneInfo.phoneNumber,
-        last_login_at: new Date(),
-        login_count: 1,
+        is_active: true,
       };
 
-      const newUser = await User.createWithInviteCode(userData, inviteCode);
+      // 如果提供了邀请码，验证并设置
+      if (inviteCode) {
+        const inviteValidation = await UserAdapterService.validateInviteCode(
+          inviteCode
+        );
+        if (!inviteValidation.valid) {
+          logger.warn(`无效的邀请码: ${inviteCode}`);
+          // 邀请码无效时仍然继续，但不设置邀请关系
+        } else {
+          logger.info(`使用邀请码: ${inviteCode}`);
+          userData.invite_from = inviteCode;
+          userData.inviter_id = inviteValidation.inviteUserInfo
+            ? inviteValidation.inviteUserInfo.id
+            : null;
+        }
+      }
 
-      // 生成 token
-      const token = generateToken(newUser);
-
-      logger.info(
-        `用户手机号注册成功: ${newUser.openid}, 手机号: ${phoneInfo.phoneNumber}, 邀请码: ${inviteCode}`
-      );
-
-      return res.json({
-        code: 200,
-        message: "注册成功",
-        data: {
-          isNewUser: true,
-          token,
-          userInfo: formatUserResponse(newUser),
-          inviteCode: newUser.invite_code,
-          inviteFrom: newUser.invite_from,
-        },
-      });
-    }
-  } catch (error) {
-    logger.error("手机号登录失败:", error);
-
-    if (error.message.includes("微信接口错误")) {
-      return res.status(400).json({
-        code: 400,
-        message: "微信登录验证失败，请重试",
-        data: null,
-      });
+      // 创建新用户
+      user = await UserAdapterService.createOrUpdateUser(userData);
     }
 
-    next(error);
-  }
-});
+    // 使用老后端登录接口获取 token
+    const loginResult = await LegacyApiService.login(user.openid, "member123");
 
-// 通过邀请码注册
-router.post("/registerWithInviteCode", async (req, res, next) => {
-  try {
-    // 验证请求参数
-    const { error, value } = registerWithInviteCodeSchema.validate(req.body);
-    if (error) {
-      return res.status(400).json({
-        code: 400,
-        message: error.details[0].message,
-        data: null,
+    if (!loginResult.success) {
+      logger.error("老后端登录失败:", loginResult.message);
+      return res.status(401).json({
+        success: false,
+        message: "登录失败: " + loginResult.message,
+        code: 401,
       });
     }
 
-    const { openid, nickname, avatar_url, phone_number, inviteCode } = value;
-
-    // 检查用户是否已存在
-    const existingUser = await User.findByOpenid(openid);
-    if (existingUser) {
-      return res.status(400).json({
-        code: 400,
-        message: "用户已注册，请直接登录",
-        data: null,
-      });
-    }
-
-    // 验证邀请码
-    const validation = await User.validateInviteCode(inviteCode);
-    if (!validation.valid) {
-      return res.status(400).json({
-        code: 400,
-        message: validation.isSystemCode ? "系统邀请码已被使用" : "邀请码无效",
-        data: null,
-      });
-    }
-
-    // 创建用户
-    const defaultNickname = nickname || `用户${openid.slice(-6)}`;
-
-    const userData = {
-      openid,
-      session_key: "", // 这里可以传入之前获取的 session_key
-      nickname: defaultNickname,
-      avatar_url: avatar_url || "",
-      phone_number: phone_number || "",
-      last_login_at: new Date(),
-      login_count: 1,
-    };
-
-    const user = await User.createWithInviteCode(userData, inviteCode);
-
-    // 生成 token
-    const token = generateToken(user);
-
-    logger.info(`用户注册成功: ${user.openid}, 邀请码: ${inviteCode}`);
-
+    // 返回登录结果
     res.json({
-      code: 200,
-      message: "注册成功",
+      success: true,
+      message: "登录成功",
       data: {
-        token,
+        token: loginResult.token,
+        tokenHead: loginResult.tokenHead,
         userInfo: formatUserResponse(user),
+        isNewUser: user.isNewUser || false,
         inviteCode: user.invite_code,
         inviteFrom: user.invite_from,
       },
     });
   } catch (error) {
-    logger.error("用户注册失败:", error);
+    logger.error("登录失败:", error);
+    next(error);
+  }
+});
 
-    if (error.message === "邀请码无效") {
+// 手机号登录
+router.post("/phoneLogin", async (req, res, next) => {
+  try {
+    const { code, encryptedData, iv, inviteCode } = req.body;
+
+    logger.info(
+      `手机号登录请求参数: code=${code}, inviteCode=${inviteCode || "无"}`
+    );
+
+    if (!code || !encryptedData || !iv) {
       return res.status(400).json({
+        success: false,
+        message: "缺少必要参数",
         code: 400,
-        message: "邀请码无效",
-        data: null,
       });
     }
 
+    // 通过 code 获取微信用户信息
+    const wechatAuth = await wechatService.code2Session(code);
+    if (!wechatAuth || !wechatAuth.openid) {
+      logger.error("获取微信用户信息失败:", wechatAuth);
+      return res.status(400).json({
+        success: false,
+        message: "获取微信用户信息失败",
+        code: 400,
+      });
+    }
+
+    try {
+      const phoneInfo = await wechatService.decryptData(
+        wechatAuth.session_key,
+        encryptedData,
+        iv
+      );
+
+      logger.info(`手机号解密成功: ${JSON.stringify(phoneInfo, null, 2)}`);
+
+      if (!phoneInfo || !phoneInfo.phoneNumber) {
+        logger.error(
+          `解密成功但未获取到手机号: ${JSON.stringify(phoneInfo, null, 2)}`
+        );
+        return res.status(400).json({
+          success: false,
+          message: "获取手机号失败",
+          code: 400,
+        });
+      }
+
+      // 根据 openid 查找用户
+      let user = await UserAdapterService.findUserByOpenid(wechatAuth.openid);
+
+      if (!user) {
+        // 尝试根据手机号查找用户
+        user = await UserAdapterService.findUserByPhone(phoneInfo.phoneNumber);
+      }
+
+      // 如果用户不存在，创建新用户
+      if (!user) {
+        // 新用户，检查是否需要邀请码
+        const requireInviteCode = process.env.REQUIRE_INVITE_CODE === "true";
+
+        if (requireInviteCode && !inviteCode) {
+          // 新用户必须提供邀请码才能注册，不能先创建用户
+          logger.info(
+            `新用户注册需要邀请码: openid=${wechatAuth.openid}, phone=${phoneInfo.phoneNumber}`
+          );
+          return res.status(400).json({
+            success: false,
+            message: "新用户注册需要邀请码",
+            code: 400,
+            data: {
+              isNewUser: true,
+              needInviteCode: true,
+              openid: wechatAuth.openid,
+              phoneNumber: phoneInfo.phoneNumber,
+            },
+          });
+        }
+
+        // 验证邀请码（如果提供了的话）
+        let inviteValidation = { valid: true };
+        if (inviteCode) {
+          logger.info(`开始验证邀请码: ${inviteCode}`);
+          inviteValidation = await UserAdapterService.validateInviteCode(
+            inviteCode
+          );
+          logger.info(`邀请码验证结果: ${JSON.stringify(inviteValidation)}`);
+          if (!inviteValidation.valid) {
+            return res.status(400).json({
+              success: false,
+              message: inviteValidation.isSystemCode
+                ? "系统邀请码已被使用"
+                : "邀请码无效",
+              code: 400,
+            });
+          }
+        }
+
+        // 创建用户
+        const userData = {
+          openid: wechatAuth.openid,
+          phone_number: phoneInfo.phoneNumber,
+          is_active: true,
+        };
+
+        if (inviteCode) {
+          userData.invite_from = inviteCode;
+          userData.inviter_id = inviteValidation.inviteUserInfo
+            ? inviteValidation.inviteUserInfo.id
+            : null;
+          logger.info(
+            `设置邀请码信息: invite_from=${userData.invite_from}, inviter_id=${userData.inviter_id}`
+          );
+        }
+
+        logger.info(`准备创建用户，userData: ${JSON.stringify(userData)}`);
+        user = await UserAdapterService.createOrUpdateUser(userData);
+        logger.info(
+          `用户创建完成，返回的用户信息: invite_from=${user.invite_from}, invite_code=${user.invite_code}`
+        );
+      } else {
+        // 更新用户手机号
+        if (!user.phone_number && phoneInfo.phoneNumber) {
+          user = await user.update({
+            phone_number: phoneInfo.phoneNumber,
+          });
+        }
+      }
+
+      // 使用老后端登录接口获取 token
+      const loginResult = await LegacyApiService.login(
+        user.openid,
+        "member123"
+      );
+
+      if (!loginResult.success) {
+        logger.error("老后端登录失败:", loginResult.message);
+        return res.status(401).json({
+          success: false,
+          message: "登录失败: " + loginResult.message,
+          code: 401,
+        });
+      }
+
+      // 返回登录结果
+      res.json({
+        success: true,
+        message: "登录成功",
+        data: {
+          token: loginResult.token,
+          tokenHead: loginResult.tokenHead,
+          userInfo: formatUserResponse(user),
+          isNewUser: user.isNewUser || false,
+          inviteCode: user.invite_code,
+          inviteFrom: user.invite_from,
+        },
+      });
+    } catch (error) {
+      logger.error("手机号解密失败:", error);
+      return res.status(400).json({
+        success: false,
+        message: "手机号解密失败",
+        code: 400,
+      });
+    }
+  } catch (error) {
+    logger.error("手机号登录失败:", error);
     next(error);
   }
 });
@@ -396,20 +318,20 @@ router.post("/validateInviteCode", async (req, res, next) => {
     const { error, value } = validateInviteCodeSchema.validate(req.body);
     if (error) {
       return res.status(400).json({
-        code: 400,
+        success: false,
         message: error.details[0].message,
-        data: null,
+        code: 400,
       });
     }
 
     const { inviteCode } = value;
 
     // 验证邀请码
-    const validation = await User.validateInviteCode(inviteCode);
+    const validation = await UserAdapterService.validateInviteCode(inviteCode);
 
     if (validation.valid) {
       res.json({
-        code: 200,
+        success: true,
         message: "邀请码有效",
         data: {
           valid: true,
@@ -417,9 +339,10 @@ router.post("/validateInviteCode", async (req, res, next) => {
         },
       });
     } else {
-      res.json({
-        code: 400,
+      res.status(400).json({
+        success: false,
         message: validation.isSystemCode ? "系统邀请码已被使用" : "邀请码无效",
+        code: 400,
         data: {
           valid: false,
           inviteUserInfo: null,
@@ -433,30 +356,20 @@ router.post("/validateInviteCode", async (req, res, next) => {
 });
 
 // 更新用户资料
-router.post("/updateProfile", authenticateToken, async (req, res, next) => {
+router.post("/updateProfile", authMiddleware, async (req, res, next) => {
   try {
     // 验证请求参数
     const { error, value } = updateProfileSchema.validate(req.body);
     if (error) {
       return res.status(400).json({
-        code: 400,
+        success: false,
         message: error.details[0].message,
-        data: null,
+        code: 400,
       });
     }
 
     const { nickname, avatar_url, phone_number } = value;
-    const userId = req.user.id;
-
-    // 查找用户
-    const user = await User.findByPk(userId);
-    if (!user) {
-      return res.status(404).json({
-        code: 404,
-        message: "用户不存在",
-        data: null,
-      });
-    }
+    const user = req.user;
 
     // 更新用户信息
     const updateData = {
@@ -465,15 +378,18 @@ router.post("/updateProfile", authenticateToken, async (req, res, next) => {
       phone_number: phone_number || user.phone_number,
     };
 
-    await user.update(updateData);
+    const updatedUser = await UserAdapterService.createOrUpdateUser({
+      ...user,
+      ...updateData,
+    });
 
     logger.info(`用户资料更新成功: ${user.openid}`);
 
     res.json({
-      code: 200,
+      success: true,
       message: "用户资料更新成功",
       data: {
-        userInfo: formatUserResponse(user),
+        userInfo: formatUserResponse(updatedUser),
       },
     });
   } catch (error) {
@@ -483,16 +399,19 @@ router.post("/updateProfile", authenticateToken, async (req, res, next) => {
 });
 
 // 验证 Token
-router.post("/verify", authenticateToken, async (req, res, next) => {
+router.post("/verify", authMiddleware, async (req, res, next) => {
   try {
-    const userId = req.user.id;
-    const user = await User.findByPk(userId);
+    const user = req.user;
 
-    if (!user) {
-      return res.status(404).json({
-        code: 404,
-        message: "用户不存在",
-        data: null,
+    // 使用老后端登录接口刷新 token
+    const loginResult = await LegacyApiService.login(user.openid, "member123");
+
+    if (!loginResult.success) {
+      logger.error("老后端 token 刷新失败:", loginResult.message);
+      return res.status(401).json({
+        success: false,
+        message: "Token 验证失败: " + loginResult.message,
+        code: 401,
       });
     }
 
@@ -500,6 +419,8 @@ router.post("/verify", authenticateToken, async (req, res, next) => {
       success: true,
       message: "Token 验证成功",
       data: {
+        token: loginResult.token,
+        tokenHead: loginResult.tokenHead,
         userInfo: formatUserResponse(user),
         inviteCode: user.invite_code,
         inviteFrom: user.invite_from,
@@ -512,11 +433,10 @@ router.post("/verify", authenticateToken, async (req, res, next) => {
 });
 
 // 获取邀请统计信息
-router.get("/inviteStats", authenticateToken, async (req, res, next) => {
+router.get("/inviteStats", noVerifyAuthMiddleware, async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const stats = await User.getInviteStats(userId);
-    const invitedUsers = await User.getInvitedUsers(userId);
+    const stats = await UserAdapterService.getInviteStats(userId);
 
     res.json({
       success: true,
@@ -524,7 +444,6 @@ router.get("/inviteStats", authenticateToken, async (req, res, next) => {
       data: {
         inviteCode: stats.inviteCode,
         invitedCount: stats.invitedCount,
-        invitedUsers,
       },
     });
   } catch (error) {

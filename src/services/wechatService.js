@@ -99,6 +99,21 @@ class WechatService {
   // 解密手机号数据
   decryptData(sessionKey, encryptedData, iv) {
     try {
+      // 添加详细日志
+      logger.info(`开始解密手机号数据`);
+      logger.info(
+        `会话密钥长度: ${sessionKey.length}, 前10位: ${sessionKey.substring(
+          0,
+          10
+        )}...`
+      );
+      logger.info(
+        `加密数据长度: ${
+          encryptedData.length
+        }, 前10位: ${encryptedData.substring(0, 10)}...`
+      );
+      logger.info(`初始向量长度: ${iv.length}, 完整内容: ${iv}`);
+
       // 检查是否为测试环境
       if (
         !this.appId ||
@@ -119,32 +134,76 @@ class WechatService {
       }
 
       // Base64 解码
-      const sessionKeyBuffer = Buffer.from(sessionKey, "base64");
-      const encryptedBuffer = Buffer.from(encryptedData, "base64");
-      const ivBuffer = Buffer.from(iv, "base64");
+      try {
+        const sessionKeyBuffer = Buffer.from(sessionKey, "base64");
+        logger.info(
+          `会话密钥解码后长度(字节): ${
+            sessionKeyBuffer.length
+          }, 数据: ${sessionKeyBuffer.toString("hex")}`
+        );
 
-      // AES-128-CBC 解密
-      const decipher = crypto.createDecipheriv(
-        "aes-128-cbc",
-        sessionKeyBuffer,
-        ivBuffer
-      );
-      decipher.setAutoPadding(true);
+        const encryptedBuffer = Buffer.from(encryptedData, "base64");
+        logger.info(`加密数据解码后长度(字节): ${encryptedBuffer.length}`);
 
-      let decrypted = decipher.update(encryptedBuffer, null, "utf8");
-      decrypted += decipher.final("utf8");
+        const ivBuffer = Buffer.from(iv, "base64");
+        logger.info(
+          `初始向量解码后长度(字节): ${
+            ivBuffer.length
+          }, 数据: ${ivBuffer.toString("hex")}`
+        );
 
-      // 解析 JSON
-      const phoneData = JSON.parse(decrypted);
+        // 检查密钥长度是否正确
+        if (sessionKeyBuffer.length !== 16) {
+          logger.error(
+            `会话密钥长度错误，预期16字节，实际${sessionKeyBuffer.length}字节`
+          );
+        }
 
-      // 验证 appId
-      if (phoneData.watermark && phoneData.watermark.appid !== this.appId) {
-        throw new Error("appId 不匹配，数据可能被篡改");
+        if (ivBuffer.length !== 16) {
+          logger.error(
+            `初始向量长度错误，预期16字节，实际${ivBuffer.length}字节`
+          );
+        }
+
+        // AES-128-CBC 解密
+        logger.info("创建解密器: aes-128-cbc");
+        const decipher = crypto.createDecipheriv(
+          "aes-128-cbc",
+          sessionKeyBuffer,
+          ivBuffer
+        );
+        decipher.setAutoPadding(true);
+        logger.info("设置自动填充: true");
+
+        logger.info("开始解密...");
+        let decrypted = decipher.update(encryptedBuffer, null, "utf8");
+        decrypted += decipher.final("utf8");
+        logger.info(`解密完成，解密后数据长度: ${decrypted.length}`);
+        logger.info(`解密数据前30个字符: ${decrypted.substring(0, 30)}...`);
+
+        // 解析 JSON
+        logger.info("解析 JSON...");
+        const phoneData = JSON.parse(decrypted);
+        logger.info(`JSON解析成功: ${JSON.stringify(phoneData, null, 2)}`);
+
+        // 验证 appId
+        if (phoneData.watermark && phoneData.watermark.appid !== this.appId) {
+          logger.error(
+            `appId 不匹配，期望: ${this.appId}, 实际: ${phoneData.watermark.appid}`
+          );
+          throw new Error("appId 不匹配，数据可能被篡改");
+        }
+        logger.info("appId 验证通过");
+
+        return phoneData;
+      } catch (decryptError) {
+        logger.error(`解密过程发生错误: ${decryptError.message}`);
+        logger.error(`错误堆栈: ${decryptError.stack}`);
+        throw decryptError;
       }
-
-      return phoneData;
     } catch (error) {
-      logger.error("解密手机号数据失败:", error);
+      logger.error(`解密手机号数据失败: ${error.message}`);
+      logger.error(`错误堆栈: ${error.stack}`);
       throw new Error("解密手机号数据失败");
     }
   }
