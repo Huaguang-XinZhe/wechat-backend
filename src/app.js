@@ -11,7 +11,7 @@ const errorHandler = require("./middleware/errorHandler");
 // const { connectDB } = require("./config/database"); // 暂时禁用数据库
 const { testLegacyConnection } = require("./config/legacyDatabase"); // 引入老系统数据库连接测试
 const authRoutes = require("./routes/auth");
-const paymentSimpleRoutes = require("./routes/payment-simple"); // 使用简化版支付路由
+const paymentRoutes = require("./routes/payment"); // 使用完整版支付路由
 const userRoutes = require("./routes/user");
 const debugRoutes = require("./routes/debug");
 const authLegacyRoutes = require("./routes/auth-legacy"); // 添加老系统兼容路由
@@ -22,7 +22,8 @@ const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || "0.0.0.0"; // 监听所有网络接口
 
 // 信任代理，支持 ngrok/x-forwarded-for
-app.set("trust proxy", true);
+// 修改为只信任特定的代理，而不是所有代理
+app.set("trust proxy", ["loopback", "linklocal", "uniquelocal"]);
 
 // 中间件配置
 app.use(helmet()); // 安全头
@@ -49,7 +50,8 @@ app.use(
         if (
           origin.startsWith("http://192.168.") ||
           origin.startsWith("http://10.") ||
-          origin.startsWith("http://172.")
+          origin.startsWith("http://172.") ||
+          origin.includes("ngrok") // 允许 ngrok 域名
         ) {
           return callback(null, true);
         }
@@ -73,6 +75,20 @@ const limiter = rateLimit({
     error: "请求过于频繁，请稍后再试",
     code: 429,
   },
+  // 自定义密钥生成器，处理 ngrok 等代理情况
+  keyGenerator: (req) => {
+    // 优先使用 X-Forwarded-For 的第一个 IP（客户端真实 IP）
+    if (req.headers["x-forwarded-for"]) {
+      const forwardedIps = req.headers["x-forwarded-for"]
+        .split(",")
+        .map((ip) => ip.trim());
+      return forwardedIps[0];
+    }
+    // 回退到 req.ip
+    return req.ip;
+  },
+  // 禁用 trustProxy 验证
+  validate: { trustProxy: false },
 });
 app.use("/api/", limiter);
 
@@ -282,7 +298,7 @@ app.get("/api", (req, res) => {
 
 // API 路由
 app.use("/api/auth", authRoutes);
-app.use("/api/payment", paymentSimpleRoutes); // 使用简化版支付路由
+app.use("/api/payment", paymentRoutes); // 使用完整版支付路由
 app.use("/api/user", userRoutes);
 app.use("/api/debug", debugRoutes);
 // 添加老系统兼容路由

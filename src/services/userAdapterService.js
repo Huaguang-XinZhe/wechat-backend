@@ -1,6 +1,7 @@
 const { UmsMember, UmsMemberWechat } = require("../models/legacy");
 const logger = require("../utils/logger");
 const bcrypt = require("bcrypt");
+const { legacySequelize } = require("../config/legacyDatabase"); // 修正导入路径
 
 class UserAdapterService {
   /**
@@ -210,6 +211,20 @@ class UserAdapterService {
         });
       }
 
+      // 如果提供了邀请码，验证并设置
+      if (userData.invite_code) {
+        const inviteValidation = await UserAdapterService.validateInviteCode(
+          userData.invite_code
+        );
+        if (!inviteValidation.valid) {
+          logger.warn(`无效的邀请码: ${userData.invite_code}`);
+          // 邀请码无效时仍然继续，但不设置邀请关系
+        } else {
+          logger.info(`使用邀请码: ${userData.invite_code}`);
+          userData.invite_from = userData.invite_code;
+        }
+      }
+
       // 开始事务
       const transaction = await UmsMember.sequelize.transaction();
 
@@ -264,7 +279,6 @@ class UserAdapterService {
             {
               invite_code: userData.invite_code || wechatInfo.invite_code,
               invite_from: userData.invite_from || wechatInfo.invite_from,
-              inviter_id: userData.inviter_id || wechatInfo.inviter_id,
             },
             { transaction }
           );
@@ -279,7 +293,6 @@ class UserAdapterService {
             openid: userData.openid, // 使用原始 openid
             invite_code: inviteCode, // 使用生成的邀请码
             invite_from: userData.invite_from || null,
-            inviter_id: userData.inviter_id || null,
           };
           logger.info(
             `准备创建微信扩展信息，数据: ${JSON.stringify(wechatData)}`
@@ -324,12 +337,30 @@ class UserAdapterService {
    */
   static async validateInviteCode(inviteCode) {
     try {
-      logger.info(`验证邀请码: ${inviteCode}`);
+      // 清理邀请码（去除前后空格）
+      const cleanInviteCode = inviteCode.trim();
+      logger.info(`验证邀请码: ${cleanInviteCode}`);
 
       // 检查系统默认邀请码
-      if (inviteCode === "AAA") {
+      if (cleanInviteCode === "AAA") {
+        logger.info(`系统邀请码 AAA 验证中`);
+
+        // 检查系统邀请码是否已被使用过
+        const usedSystemCode = await UmsMemberWechat.findOne({
+          where: { invite_from: "AAA" },
+        });
+
+        if (usedSystemCode) {
+          logger.info(`系统邀请码 AAA 已被使用过，拒绝验证`);
+          return {
+            valid: false,
+            isSystemCode: true,
+            inviteUserInfo: null,
+            message: "系统邀请码已被使用",
+          };
+        }
+
         logger.info(`系统邀请码 AAA 验证通过`);
-        // 可以在这里添加逻辑限制系统邀请码的使用次数
         return {
           valid: true,
           isSystemCode: true,
@@ -337,25 +368,44 @@ class UserAdapterService {
         };
       }
 
-      // 查找用户邀请码
+      // 查找用户邀请码 - 使用大小写敏感查询
       const wechatInfo = await UmsMemberWechat.findOne({
-        where: { invite_code: inviteCode },
+        where: { invite_code: cleanInviteCode },
       });
 
-      if (wechatInfo) {
-        // 查找邀请人
-        const inviter = await UmsMember.findByPk(wechatInfo.inviter_id);
+      // 打印查询结果详情
+      logger.info(`邀请码查询结果: ${wechatInfo ? "找到匹配" : "未找到匹配"}`);
 
-        if (inviter) {
-          return {
-            valid: true,
-            isSystemCode: false,
-            inviteUserInfo: {
-              id: inviter.id,
-              nickName: inviter.nickname,
-            },
-          };
-        }
+      // 查询所有邀请码列表用于调试
+      const allInviteCodes = await UmsMemberWechat.findAll({
+        attributes: ["openid", "invite_code"],
+        limit: 10,
+      });
+
+      logger.info(
+        `数据库中的邀请码列表(前10个): ${JSON.stringify(
+          allInviteCodes.map((item) => ({
+            openid: item.openid.substring(0, 8) + "...",
+            invite_code: item.invite_code,
+          }))
+        )}`
+      );
+
+      if (wechatInfo) {
+        logger.info(
+          `找到匹配的邀请码: ${
+            wechatInfo.invite_code
+          }, openid: ${wechatInfo.openid.substring(0, 8)}...`
+        );
+
+        // 邀请码存在，直接返回有效
+        return {
+          valid: true,
+          isSystemCode: false,
+          inviteUserInfo: null,
+        };
+      } else {
+        logger.info(`未找到匹配的邀请码: ${cleanInviteCode}`);
       }
 
       return {
@@ -439,9 +489,9 @@ class UserAdapterService {
         `找到微信信息: ${wechatInfo.openid}, invite_code: ${wechatInfo.invite_code}`
       );
 
-      // 查找被邀请的用户数量
+      // 查找被邀请的用户数量 - 使用 invite_from 字段
       const invitedCount = await UmsMemberWechat.count({
-        where: { inviter_id: userId },
+        where: { invite_from: wechatInfo.invite_code },
       });
 
       logger.debug(`被邀请用户数量: ${invitedCount}`);
@@ -482,7 +532,6 @@ class UserAdapterService {
       // 邀请码相关字段
       invite_code: wechatInfo ? wechatInfo.invite_code : null,
       invite_from: wechatInfo ? wechatInfo.invite_from : null,
-      inviter_id: wechatInfo ? wechatInfo.inviter_id : null,
 
       // 添加更新方法模拟内存用户的行为
       update: async (updateData) => {

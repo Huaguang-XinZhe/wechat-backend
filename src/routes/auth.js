@@ -99,9 +99,6 @@ router.post("/login", async (req, res, next) => {
         } else {
           logger.info(`使用邀请码: ${inviteCode}`);
           userData.invite_from = inviteCode;
-          userData.inviter_id = inviteValidation.inviteUserInfo
-            ? inviteValidation.inviteUserInfo.id
-            : null;
         }
       }
 
@@ -230,9 +227,11 @@ router.post("/phoneLogin", async (req, res, next) => {
           if (!inviteValidation.valid) {
             return res.status(400).json({
               success: false,
-              message: inviteValidation.isSystemCode
-                ? "系统邀请码已被使用"
-                : "邀请码无效",
+              message:
+                inviteValidation.message ||
+                (inviteValidation.isSystemCode
+                  ? "系统邀请码已被使用"
+                  : "邀请码无效"),
               code: 400,
             });
           }
@@ -247,12 +246,6 @@ router.post("/phoneLogin", async (req, res, next) => {
 
         if (inviteCode) {
           userData.invite_from = inviteCode;
-          userData.inviter_id = inviteValidation.inviteUserInfo
-            ? inviteValidation.inviteUserInfo.id
-            : null;
-          logger.info(
-            `设置邀请码信息: invite_from=${userData.invite_from}, inviter_id=${userData.inviter_id}`
-          );
         }
 
         logger.info(`准备创建用户，userData: ${JSON.stringify(userData)}`);
@@ -341,7 +334,9 @@ router.post("/validateInviteCode", async (req, res, next) => {
     } else {
       res.status(400).json({
         success: false,
-        message: validation.isSystemCode ? "系统邀请码已被使用" : "邀请码无效",
+        message:
+          validation.message ||
+          (validation.isSystemCode ? "系统邀请码已被使用" : "邀请码无效"),
         code: 400,
         data: {
           valid: false,

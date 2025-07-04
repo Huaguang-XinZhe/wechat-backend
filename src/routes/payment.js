@@ -3,8 +3,9 @@ const Joi = require("joi");
 const { v4: uuidv4 } = require("uuid");
 const router = express.Router();
 
-const { authenticateToken } = require("../middleware/auth");
+const { authMiddleware } = require("../middleware/auth");
 const wechatService = require("../services/wechatService");
+const wechatTransferService = require("../services/wechatTransferService");
 const logger = require("../utils/logger");
 
 // 模拟订单和用户模型（因为Order.js创建有问题，这里临时模拟）
@@ -29,7 +30,7 @@ const createOrderSchema = Joi.object({
 });
 
 // 创建支付订单
-router.post("/create", authenticateToken, async (req, res, next) => {
+router.post("/create", authMiddleware, async (req, res, next) => {
   try {
     // 验证请求参数
     const { error, value } = createOrderSchema.validate(req.body);
@@ -106,7 +107,7 @@ router.post("/create", authenticateToken, async (req, res, next) => {
 });
 
 // 查询订单状态
-router.get("/order/:orderNo", authenticateToken, async (req, res, next) => {
+router.get("/order/:orderNo", authMiddleware, async (req, res, next) => {
   try {
     const { orderNo } = req.params;
     const user = req.user;
@@ -151,7 +152,7 @@ router.get("/order/:orderNo", authenticateToken, async (req, res, next) => {
 });
 
 // 获取用户订单列表
-router.get("/orders", authenticateToken, async (req, res, next) => {
+router.get("/orders", authMiddleware, async (req, res, next) => {
   try {
     const user = req.user;
     const { page = 1, limit = 10, status } = req.query;
@@ -286,7 +287,7 @@ router.post("/notify", (req, res) => {
 });
 
 // 取消订单
-router.post("/cancel/:orderNo", authenticateToken, async (req, res, next) => {
+router.post("/cancel/:orderNo", authMiddleware, async (req, res, next) => {
   try {
     const { orderNo } = req.params;
     const user = req.user;
@@ -335,6 +336,269 @@ router.post("/cancel/:orderNo", authenticateToken, async (req, res, next) => {
     });
   } catch (error) {
     logger.error("取消订单失败:", error);
+    next(error);
+  }
+});
+
+// ===== 测试接口 =====
+
+// 创建测试订单验证 schema
+const createTestOrderSchema = Joi.object({
+  amount: Joi.number().positive().precision(2).default(0.01).messages({
+    "number.positive": "金额必须大于0",
+  }),
+  description: Joi.string().default("支付功能测试订单"),
+  testMode: Joi.boolean().default(true),
+});
+
+// 创建测试订单
+router.post("/createTestOrder", authMiddleware, async (req, res, next) => {
+  try {
+    const { error, value } = createTestOrderSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.details[0].message,
+        code: 400,
+      });
+    }
+
+    const { amount, description, testMode } = value;
+    const user = req.user;
+
+    // 生成测试订单号
+    const orderNo = `TEST${Date.now()}${Math.floor(Math.random() * 1000)
+      .toString()
+      .padStart(3, "0")}`;
+
+    // 创建测试订单
+    const order = {
+      id: Date.now(),
+      orderNo,
+      userId: user.id,
+      openid: user.openid,
+      goodsId: "test_goods",
+      goodsName: description,
+      amount,
+      status: "pending",
+      testMode: true,
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 30 * 60 * 1000), // 30分钟后过期
+    };
+
+    orders.set(orderNo, order);
+
+    logger.info(`创建测试订单成功: ${orderNo}, 用户: ${user.openid}`);
+
+    res.json({
+      success: true,
+      message: "创建测试订单成功",
+      data: {
+        id: order.id,
+        orderSn: orderNo,
+        amount,
+        description,
+        status: order.status,
+        createdAt: order.createdAt,
+        expiresAt: order.expiresAt,
+      },
+    });
+  } catch (error) {
+    logger.error("创建测试订单失败:", error);
+    next(error);
+  }
+});
+
+// 微信小程序支付验证 schema
+const wxMiniPaySchema = Joi.object({
+  orderId: Joi.alternatives().try(Joi.number(), Joi.string()).required(),
+  amount: Joi.number().positive().precision(2).default(0.01),
+  total_fee: Joi.number().positive().precision(2), // 添加 total_fee 参数
+  description: Joi.string().default("微信支付测试"),
+});
+
+// 微信小程序支付测试
+router.post("/wxMiniPay", authMiddleware, async (req, res, next) => {
+  try {
+    const { error, value } = wxMiniPaySchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.details[0].message,
+        code: 400,
+      });
+    }
+
+    const { orderId, amount, total_fee, description } = value;
+    const user = req.user;
+
+    // 查找订单
+    let order = null;
+    for (const [orderNo, orderData] of orders.entries()) {
+      if (orderData.id == orderId) {
+        order = orderData;
+        break;
+      }
+    }
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "订单不存在",
+        code: 404,
+      });
+    }
+
+    if (order.userId !== user.id) {
+      return res.status(403).json({
+        success: false,
+        message: "无权访问此订单",
+        code: 403,
+      });
+    }
+
+    // 获取客户端IP
+    const clientIp = req.ip || req.connection.remoteAddress || "127.0.0.1";
+
+    // 创建支付订单数据
+    const orderData = {
+      orderNo: order.orderNo,
+      amount: total_fee || order.amount, // 优先使用 total_fee，如果没有则使用 order.amount
+      description: order.goodsName,
+      openid: user.openid,
+      notifyUrl:
+        process.env.PAYMENT_NOTIFY_URL ||
+        "https://your-domain.com/api/payment/notify",
+      clientIp,
+    };
+
+    // 调用微信支付接口
+    const paymentResult = await wechatService.createPayOrder(orderData);
+
+    // 更新订单
+    order.prepayId = paymentResult.prepayId;
+    orders.set(order.orderNo, order);
+
+    logger.info(
+      `微信支付测试订单创建成功: ${order.orderNo}, prepayId: ${paymentResult.prepayId}`
+    );
+
+    res.json({
+      success: true,
+      message: "获取支付参数成功",
+      data: paymentResult.payParams,
+    });
+  } catch (error) {
+    logger.error("微信支付测试失败:", error);
+    next(error);
+  }
+});
+
+// 商家转账验证 schema
+const transferSchema = Joi.object({
+  amount: Joi.number().positive().precision(2).default(0.01),
+  transfer_remark: Joi.string().default("商家转账测试"),
+  testMode: Joi.boolean().default(true),
+});
+
+// 商家转账测试
+router.post("/transferToUser", authMiddleware, async (req, res, next) => {
+  try {
+    const { error, value } = transferSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.details[0].message,
+        code: 400,
+      });
+    }
+
+    const { amount, transfer_remark, testMode } = value;
+    const user = req.user;
+
+    // 生成转账单号
+    const outBillNo = `TRANSFER${Date.now()}${Math.floor(Math.random() * 1000)
+      .toString()
+      .padStart(3, "0")}`;
+
+    // 构建转账数据
+    const transferData = {
+      outBillNo,
+      transferAmount: Math.round(amount * 100), // 转换为分
+      openid: user.openid,
+      transferRemark: transfer_remark,
+      transferSceneId: "1000", // 转账场景ID
+      userRecvPerception: "收到转账", // 用户收款感知描述
+      notifyUrl: process.env.TRANSFER_NOTIFY_URL, // 转账回调地址（可选）
+      testMode: testMode, // 明确传递测试模式参数
+    };
+
+    try {
+      // 调用转账接口
+      const transferResult = await wechatTransferService.transferToUser(
+        transferData
+      );
+
+      logger.info(
+        `商家转账测试成功: ${outBillNo}, 用户: ${user.openid}, 金额: ${amount}`
+      );
+
+      res.json({
+        success: true,
+        message: "转账成功",
+        data: {
+          transferNo: transferResult.transferNo,
+          billNo: transferResult.billNo,
+          amount,
+          status: transferResult.status,
+          createTime: transferResult.createTime,
+          mock: transferResult.mock || false,
+        },
+      });
+    } catch (transferError) {
+      // 捕获转账服务的错误，返回更详细的错误信息
+      logger.error("商家转账测试失败:", transferError);
+
+      // 构建详细的错误响应
+      let errorMessage = "转账失败";
+      let errorDetails = null;
+
+      if (transferError.response && transferError.response.data) {
+        errorMessage =
+          transferError.response.data.message || "微信支付API返回错误";
+        errorDetails = transferError.response.data;
+      } else if (transferError.message) {
+        errorMessage = transferError.message;
+      }
+
+      res.status(400).json({
+        success: false,
+        message: errorMessage,
+        details: errorDetails,
+        code: 400,
+      });
+    }
+  } catch (error) {
+    logger.error("商家转账测试失败:", error);
+    next(error);
+  }
+});
+
+// 查询转账结果
+router.get("/transfer/:billNo", authMiddleware, async (req, res, next) => {
+  try {
+    const { billNo } = req.params;
+
+    // 调用查询转账接口
+    const queryResult = await wechatTransferService.queryTransfer(billNo);
+
+    res.json({
+      success: true,
+      message: "查询成功",
+      data: queryResult,
+    });
+  } catch (error) {
+    logger.error("查询转账结果失败:", error);
     next(error);
   }
 });

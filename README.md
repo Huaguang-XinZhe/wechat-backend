@@ -277,11 +277,22 @@ npm run docker:build
 npm run docker:run
 ```
 
-### Docker Compose
+### Docker Compose 部署（推荐）
+
+使用 Docker Compose 部署，并连接到 mall_mall-net 网络：
 
 ```bash
-docker-compose up -d
+# 启动服务
+npm run docker:compose:up
+
+# 查看日志
+npm run docker:compose:logs
+
+# 停止服务
+npm run docker:compose:down
 ```
+
+> 注意：此配置已设置使用 mall_mall-net 内部网络，确保该网络已存在。
 
 ## 📝 开发说明
 

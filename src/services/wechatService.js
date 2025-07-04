@@ -1,5 +1,6 @@
 const axios = require("axios");
 const crypto = require("crypto");
+const fs = require("fs");
 const logger = require("../utils/logger");
 
 class WechatService {
@@ -8,6 +9,12 @@ class WechatService {
     this.appSecret = process.env.WECHAT_APP_SECRET;
     this.mchId = process.env.WECHAT_MCH_ID;
     this.apiKey = process.env.WECHAT_API_KEY;
+    this.apiV3Key = process.env.WECHAT_API_V3_KEY; // V3版本需要API v3密钥
+    this.serialNo = process.env.WECHAT_SERIAL_NO; // 商户证书序列号
+
+    // 证书路径
+    this.certPath = process.env.WECHAT_CERT_PATH;
+    this.keyPath = process.env.WECHAT_KEY_PATH;
 
     // 微信API基础地址
     this.baseURL = "https://api.weixin.qq.com";
@@ -18,6 +25,35 @@ class WechatService {
       token: null,
       expiresAt: 0,
     };
+
+    // 加载证书
+    this.loadCertificates();
+  }
+
+  // 加载证书文件
+  loadCertificates() {
+    try {
+      if (this.certPath && fs.existsSync(this.certPath)) {
+        this.certificate = fs.readFileSync(this.certPath, "utf8");
+        logger.info("微信支付证书加载成功");
+      } else {
+        logger.warn("微信支付证书文件不存在，将无法使用支付功能");
+      }
+
+      if (this.keyPath && fs.existsSync(this.keyPath)) {
+        this.privateKey = fs.readFileSync(this.keyPath, "utf8");
+        logger.info("微信支付私钥加载成功，将使用RSA签名");
+      } else {
+        logger.warn("微信支付私钥文件不存在，将无法使用支付功能");
+      }
+
+      // 检查证书和密钥是否都加载成功
+      if (this.certificate && this.privateKey) {
+        logger.info("微信支付V3 API证书和私钥已准备就绪");
+      }
+    } catch (error) {
+      logger.error("加载微信支付证书失败:", error);
+    }
   }
 
   // 通过code获取openid和session_key
@@ -260,122 +296,135 @@ class WechatService {
         clientIp = "127.0.0.1",
       } = orderData;
 
-      // 检查是否为测试环境或未配置真实支付信息
-      if (
-        !this.mchId ||
-        this.mchId === "your_merchant_id" ||
-        !this.apiKey ||
-        this.apiKey === "your_api_key"
-      ) {
-        logger.info("检测到测试环境，使用模拟支付订单");
-
-        const mockPrepayId = `mock_prepay_id_${Date.now()}_${Math.random()
-          .toString(36)
-          .substr(2, 9)}`;
-        const payParams = this.generateMockPayParams(mockPrepayId);
-
-        return {
-          prepayId: mockPrepayId,
-          payParams,
-        };
+      // 检查金额是否有效
+      if (typeof amount !== "number" || amount <= 0) {
+        throw new Error("支付金额无效，必须为大于0的数字");
       }
 
-      // 构建支付参数
-      const params = {
+      // 确保金额转换为整数分 - 先乘以100再四舍五入，避免浮点数精度问题
+      const total_fee = Math.round(amount * 100);
+
+      // 微信支付V3 API地址
+      const url = "/v3/pay/transactions/jsapi";
+      const timestamp = Math.floor(Date.now() / 1000).toString();
+      const nonce = this.generateNonceStr();
+
+      // 构建V3 API请求体
+      const requestBody = {
         appid: this.appId,
-        mch_id: this.mchId,
-        nonce_str: this.generateNonceStr(),
-        body: description,
+        mchid: this.mchId,
+        description: description,
         out_trade_no: orderNo,
-        total_fee: Math.round(amount * 100), // 转换为分
-        spbill_create_ip: clientIp,
         notify_url: notifyUrl,
-        trade_type: "JSAPI",
-        openid: openid,
+        amount: {
+          total: total_fee,
+          currency: "CNY",
+        },
+        payer: {
+          openid: openid,
+        },
+        scene_info: {
+          payer_client_ip: clientIp,
+        },
       };
 
-      // 生成签名
-      params.sign = this.generateSign(params);
+      const bodyStr = JSON.stringify(requestBody);
+      logger.info(`V3支付请求体: ${bodyStr}`);
 
-      // 构建XML
-      const xml = this.buildXML(params);
+      // 生成V3 API签名
+      const signature = this.generateV3Signature(
+        "POST",
+        url,
+        timestamp,
+        nonce,
+        bodyStr
+      );
+      const authorization = `WECHATPAY2-SHA256-RSA2048 mchid="${this.mchId}",nonce_str="${nonce}",signature="${signature}",timestamp="${timestamp}",serial_no="${process.env.WECHAT_SERIAL_NO}"`;
 
-      // 调用统一下单接口
+      logger.info(`Authorization: ${authorization.substring(0, 50)}...`);
+
+      // 调用微信支付V3 API
       const response = await axios.post(
-        `${this.payBaseURL}/pay/unifiedorder`,
-        xml,
+        `${this.payBaseURL}${url}`,
+        requestBody,
         {
           headers: {
-            "Content-Type": "application/xml",
+            Authorization: authorization,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "wechat-backend/1.0.0",
           },
         }
       );
 
-      // 解析返回结果
-      const result = await this.parseXML(response.data);
+      logger.info(`V3 API响应: ${JSON.stringify(response.data)}`);
 
-      if (result.return_code !== "SUCCESS") {
-        throw new Error(`微信支付接口调用失败: ${result.return_msg}`);
-      }
-
-      if (result.result_code !== "SUCCESS") {
-        throw new Error(
-          `创建支付订单失败: ${result.err_code} - ${result.err_code_des}`
-        );
+      // 提取预支付ID
+      const prepayId = response.data.prepay_id;
+      if (!prepayId) {
+        throw new Error("获取prepay_id失败");
       }
 
       // 生成小程序支付参数
-      const payParams = this.generateMiniProgramPayParams(result.prepay_id);
+      const payParams = this.generateMiniProgramPayParamsV3(prepayId);
 
       return {
-        prepayId: result.prepay_id,
+        prepayId: prepayId,
         payParams,
       };
     } catch (error) {
       logger.error("创建微信支付订单失败:", error);
-
-      // 开发环境降级处理
-      if (process.env.NODE_ENV === "development") {
-        logger.warn("开发环境降级处理，使用模拟支付参数");
-        const mockPrepayId = `fallback_prepay_id_${Date.now()}_${Math.random()
-          .toString(36)
-          .substr(2, 9)}`;
-        const payParams = this.generateMockPayParams(mockPrepayId);
-
-        return {
-          prepayId: mockPrepayId,
-          payParams,
-        };
-      }
-
       throw error;
     }
   }
 
-  // 生成小程序支付参数
-  generateMiniProgramPayParams(prepayId) {
+  // 生成小程序支付参数 (V3 API)
+  generateMiniProgramPayParamsV3(prepayId) {
     const timeStamp = Math.floor(Date.now() / 1000).toString();
     const nonceStr = this.generateNonceStr();
+
+    // V3 API支付参数格式
     const packageStr = `prepay_id=${prepayId}`;
 
-    const params = {
-      appId: this.appId,
-      timeStamp,
-      nonceStr,
-      package: packageStr,
-      signType: "MD5",
-    };
+    // 构建签名字符串 (V3 API方式)
+    // 签名串格式：应用id\n时间戳\n随机字符串\n预支付交易会话ID\n
+    const signatureStr = `${this.appId}\n${timeStamp}\n${nonceStr}\n${packageStr}\n`;
 
-    // 生成支付签名
-    const paySign = this.generateSign(params);
+    // 使用私钥进行签名
+    const sign = crypto.createSign("RSA-SHA256");
+    sign.update(signatureStr);
+    sign.end();
+    const paySign = sign.sign(this.privateKey, "base64");
 
     return {
       timeStamp,
       nonceStr,
       package: packageStr,
-      signType: "MD5",
+      signType: "RSA",
       paySign,
     };
+  }
+
+  // 生成V3 API签名
+  generateV3Signature(method, url, timestamp, nonce, body = "") {
+    try {
+      // 构建签名字符串
+      const signatureStr =
+        [method.toUpperCase(), url, timestamp, nonce, body].join("\n") + "\n";
+
+      logger.info(`V3签名字符串: ${signatureStr.substring(0, 100)}...`);
+
+      // 使用私钥进行SHA256withRSA签名
+      const sign = crypto.createSign("RSA-SHA256");
+      sign.update(signatureStr);
+      sign.end();
+
+      const signature = sign.sign(this.privateKey, "base64");
+      return signature;
+    } catch (error) {
+      logger.error("生成V3签名失败:", error);
+      throw error;
+    }
   }
 
   // 生成模拟支付参数（测试环境使用）
