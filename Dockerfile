@@ -1,6 +1,9 @@
-FROM node:16-alpine
+FROM node:20-alpine
 
 WORKDIR /app
+
+# 设置环境变量
+ENV NODE_ENV=production
 
 # 复制 package.json 和 package-lock.json
 COPY package*.json ./
