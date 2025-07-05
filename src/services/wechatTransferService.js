@@ -204,6 +204,7 @@ class WechatTransferService {
         transferNo: response.data.transfer_bill_no,
         createTime: response.data.create_time,
         status: "success",
+        package_info: response.data.package_info || null, // 添加 package_info 字段
       };
     } catch (error) {
       logger.error("微信转账失败:", error);
@@ -297,6 +298,7 @@ class WechatTransferService {
       status: "success",
       mock: true,
       amount: transferAmount / 100, // 转换为元，10分 = 0.1元
+      package_info: `MOCK_PACKAGE_${Date.now()}`, // 添加模拟的 package_info
     };
 
     logger.info(`模拟转账结果: ${JSON.stringify(mockResult)}`);

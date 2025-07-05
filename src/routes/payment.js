@@ -570,6 +570,7 @@ router.post("/transferToUser", authMiddleware, async (req, res, next) => {
           status: transferResult.status,
           createTime: transferResult.createTime,
           mock: transferResult.mock || false,
+          package_info: transferResult.package_info || null, // 添加 package_info 字段
         },
       });
     } catch (transferError) {
