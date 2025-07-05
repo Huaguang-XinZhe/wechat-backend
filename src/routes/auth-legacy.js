@@ -69,6 +69,7 @@ router.post("/phoneLogin", async (req, res, next) => {
     // 验证请求参数
     const { error, value } = phoneLoginSchema.validate(req.body);
     if (error) {
+      logger.warn(`手机号登录参数验证失败: ${error.details[0].message}`);
       return res.status(400).json({
         code: 400,
         message: error.details[0].message,
@@ -77,11 +78,27 @@ router.post("/phoneLogin", async (req, res, next) => {
     }
 
     const { code, encryptedData, iv, inviteCode } = value;
+    logger.info(
+      `手机号登录请求参数(legacy): code=${code}, inviteCode=${
+        inviteCode || "无"
+      }, encryptedData长度=${
+        encryptedData ? encryptedData.length : 0
+      }, iv长度=${iv ? iv.length : 0}`
+    );
 
     // 通过 code 获取 openid 和 session_key
+    logger.info(`开始获取微信用户信息(legacy): code=${code}`);
     const wechatAuth = await wechatService.code2Session(code);
+    logger.info(
+      `获取微信用户信息成功(legacy): openid=${
+        wechatAuth.openid
+      }, session_key长度=${
+        wechatAuth.session_key ? wechatAuth.session_key.length : 0
+      }`
+    );
 
     // 解密手机号信息
+    logger.info(`开始解密手机号数据(legacy)...`);
     const phoneInfo = await wechatService.decryptData(
       wechatAuth.session_key,
       encryptedData,
@@ -89,19 +106,37 @@ router.post("/phoneLogin", async (req, res, next) => {
     );
 
     if (!phoneInfo || !phoneInfo.phoneNumber) {
+      logger.error(
+        `解密成功但未获取到手机号(legacy): ${JSON.stringify(
+          phoneInfo,
+          null,
+          2
+        )}`
+      );
       return res.status(400).json({
         code: 400,
         message: "获取手机号失败",
         data: null,
       });
     }
+    logger.info(`手机号解密成功(legacy): ${phoneInfo.phoneNumber}`);
 
     // 根据 openid 查找用户
     let user = await UserAdapterService.findUserByOpenid(wechatAuth.openid);
+    logger.info(
+      `根据openid查找用户(legacy): ${wechatAuth.openid}, 结果: ${
+        user ? "找到用户" : "未找到用户"
+      }`
+    );
 
     if (!user) {
       // 尝试根据手机号查找用户
       user = await UserAdapterService.findUserByPhone(phoneInfo.phoneNumber);
+      logger.info(
+        `根据手机号查找用户(legacy): ${phoneInfo.phoneNumber}, 结果: ${
+          user ? "找到用户" : "未找到用户"
+        }`
+      );
     }
 
     if (user) {
@@ -111,6 +146,9 @@ router.post("/phoneLogin", async (req, res, next) => {
         phone_number: phoneInfo.phoneNumber,
         last_login_at: new Date(),
       };
+      logger.info(
+        `更新已有用户信息(legacy): ${user.id}, openid=${user.openid}`
+      );
 
       user = await UserAdapterService.createOrUpdateUser({
         ...user,
@@ -121,7 +159,7 @@ router.post("/phoneLogin", async (req, res, next) => {
       const token = JwtService.generateToken(user);
 
       logger.info(
-        `用户手机号登录成功: ${user.openid}, 手机号: ${phoneInfo.phoneNumber}`
+        `用户手机号登录成功(legacy): ${user.openid}, 手机号: ${phoneInfo.phoneNumber}`
       );
 
       return res.json({
@@ -137,7 +175,11 @@ router.post("/phoneLogin", async (req, res, next) => {
       });
     } else {
       // 新用户，需要注册
+      logger.info(`新用户注册(legacy), 提供的邀请码: ${inviteCode || "无"}`);
       if (!inviteCode) {
+        logger.warn(
+          `新用户注册需要邀请码(legacy): openid=${wechatAuth.openid}`
+        );
         return res.status(400).json({
           code: 400,
           message: "新用户注册需要邀请码",
@@ -149,10 +191,13 @@ router.post("/phoneLogin", async (req, res, next) => {
       }
 
       // 验证邀请码
+      logger.info(`开始验证邀请码(legacy): ${inviteCode}`);
       const validation = await UserAdapterService.validateInviteCode(
         inviteCode
       );
+      logger.info(`邀请码验证结果(legacy): ${JSON.stringify(validation)}`);
       if (!validation.valid) {
+        logger.warn(`邀请码无效(legacy): ${inviteCode}`);
         return res.status(400).json({
           code: 400,
           message: validation.isSystemCode
@@ -164,6 +209,7 @@ router.post("/phoneLogin", async (req, res, next) => {
 
       // 生成用户邀请码
       const userInviteCode = await UserAdapterService.generateInviteCode();
+      logger.info(`为新用户生成邀请码(legacy): ${userInviteCode}`);
 
       // 创建用户
       const defaultNickname = `用户${wechatAuth.openid.slice(-6)}`;
@@ -182,6 +228,9 @@ router.post("/phoneLogin", async (req, res, next) => {
           ? validation.inviteUserInfo.id
           : null,
       };
+      logger.info(
+        `创建新用户(legacy): openid=${wechatAuth.openid}, phone=${phoneInfo.phoneNumber}`
+      );
 
       const newUser = await UserAdapterService.createOrUpdateUser(userData);
 
@@ -189,7 +238,7 @@ router.post("/phoneLogin", async (req, res, next) => {
       const token = JwtService.generateToken(newUser);
 
       logger.info(
-        `用户手机号注册成功: ${newUser.openid}, 手机号: ${phoneInfo.phoneNumber}, 邀请码: ${inviteCode}`
+        `用户手机号注册成功(legacy): ${newUser.openid}, 手机号: ${phoneInfo.phoneNumber}, 邀请码: ${inviteCode}`
       );
 
       return res.json({
@@ -205,7 +254,7 @@ router.post("/phoneLogin", async (req, res, next) => {
       });
     }
   } catch (error) {
-    logger.error("手机号登录失败:", error);
+    logger.error("手机号登录失败(legacy):", error);
 
     if (error.message.includes("微信接口错误")) {
       return res.status(400).json({

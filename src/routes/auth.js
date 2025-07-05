@@ -143,7 +143,11 @@ router.post("/phoneLogin", async (req, res, next) => {
     const { code, encryptedData, iv, inviteCode } = req.body;
 
     logger.info(
-      `手机号登录请求参数: code=${code}, inviteCode=${inviteCode || "无"}`
+      `手机号登录请求参数: code=${code}, inviteCode=${
+        inviteCode || "无"
+      }, encryptedData长度=${
+        encryptedData ? encryptedData.length : 0
+      }, iv长度=${iv ? iv.length : 0}`
     );
 
     if (!code || !encryptedData || !iv) {
@@ -155,6 +159,7 @@ router.post("/phoneLogin", async (req, res, next) => {
     }
 
     // 通过 code 获取微信用户信息
+    logger.info(`开始获取微信用户信息: code=${code}`);
     const wechatAuth = await wechatService.code2Session(code);
     if (!wechatAuth || !wechatAuth.openid) {
       logger.error("获取微信用户信息失败:", wechatAuth);
@@ -164,8 +169,14 @@ router.post("/phoneLogin", async (req, res, next) => {
         code: 400,
       });
     }
+    logger.info(
+      `获取微信用户信息成功: openid=${wechatAuth.openid}, session_key长度=${
+        wechatAuth.session_key ? wechatAuth.session_key.length : 0
+      }`
+    );
 
     try {
+      logger.info(`开始解密手机号数据...`);
       const phoneInfo = await wechatService.decryptData(
         wechatAuth.session_key,
         encryptedData,
@@ -187,16 +198,31 @@ router.post("/phoneLogin", async (req, res, next) => {
 
       // 根据 openid 查找用户
       let user = await UserAdapterService.findUserByOpenid(wechatAuth.openid);
+      logger.info(
+        `根据openid查找用户: ${wechatAuth.openid}, 结果: ${
+          user ? "找到用户" : "未找到用户"
+        }`
+      );
 
       if (!user) {
         // 尝试根据手机号查找用户
         user = await UserAdapterService.findUserByPhone(phoneInfo.phoneNumber);
+        logger.info(
+          `根据手机号查找用户: ${phoneInfo.phoneNumber}, 结果: ${
+            user ? "找到用户" : "未找到用户"
+          }`
+        );
       }
 
       // 如果用户不存在，创建新用户
       if (!user) {
         // 新用户，检查是否需要邀请码
         const requireInviteCode = process.env.REQUIRE_INVITE_CODE === "true";
+        logger.info(
+          `新用户注册, 是否需要邀请码: ${requireInviteCode}, 提供的邀请码: ${
+            inviteCode || "无"
+          }`
+        );
 
         if (requireInviteCode && !inviteCode) {
           // 新用户必须提供邀请码才能注册，不能先创建用户

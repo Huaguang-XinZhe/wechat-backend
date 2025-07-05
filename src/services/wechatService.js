@@ -137,6 +137,12 @@ class WechatService {
     try {
       // 添加详细日志
       logger.info(`开始解密手机号数据`);
+      logger.info(`Node.js 版本: ${process.version}`);
+      logger.info(`OpenSSL 版本: ${process.versions.openssl}`);
+      logger.info(`平台: ${process.platform}, 架构: ${process.arch}`);
+      logger.info(`环境变量: NODE_ENV=${process.env.NODE_ENV}`);
+
+      // 记录输入参数详情
       logger.info(
         `会话密钥长度: ${sessionKey.length}, 前10位: ${sessionKey.substring(
           0,
@@ -171,21 +177,28 @@ class WechatService {
 
       // Base64 解码
       try {
+        logger.info("开始 Base64 解码...");
         const sessionKeyBuffer = Buffer.from(sessionKey, "base64");
         logger.info(
           `会话密钥解码后长度(字节): ${
             sessionKeyBuffer.length
-          }, 数据: ${sessionKeyBuffer.toString("hex")}`
+          }, 数据(十六进制): ${sessionKeyBuffer.toString("hex")}`
         );
 
         const encryptedBuffer = Buffer.from(encryptedData, "base64");
-        logger.info(`加密数据解码后长度(字节): ${encryptedBuffer.length}`);
+        logger.info(
+          `加密数据解码后长度(字节): ${
+            encryptedBuffer.length
+          }, 前10字节(十六进制): ${encryptedBuffer
+            .subarray(0, 10)
+            .toString("hex")}...`
+        );
 
         const ivBuffer = Buffer.from(iv, "base64");
         logger.info(
           `初始向量解码后长度(字节): ${
             ivBuffer.length
-          }, 数据: ${ivBuffer.toString("hex")}`
+          }, 数据(十六进制): ${ivBuffer.toString("hex")}`
         );
 
         // 检查密钥长度是否正确
@@ -193,43 +206,134 @@ class WechatService {
           logger.error(
             `会话密钥长度错误，预期16字节，实际${sessionKeyBuffer.length}字节`
           );
+          throw new Error(
+            `会话密钥长度错误: ${sessionKeyBuffer.length}字节，应为16字节`
+          );
         }
 
         if (ivBuffer.length !== 16) {
           logger.error(
             `初始向量长度错误，预期16字节，实际${ivBuffer.length}字节`
           );
+          throw new Error(
+            `初始向量长度错误: ${ivBuffer.length}字节，应为16字节`
+          );
         }
+
+        // 记录加密算法细节
+        logger.info("加密算法细节:");
+        logger.info(`- 算法: aes-128-cbc`);
+        logger.info(`- 密钥长度: ${sessionKeyBuffer.length * 8}位`);
+        logger.info(`- 初始向量长度: ${ivBuffer.length * 8}位`);
+        logger.info(`- 填充模式: PKCS#7 (自动填充)`);
+
+        // 列出可用的加密算法
+        logger.info(`可用的加密算法: ${crypto.getCiphers().join(", ")}`);
 
         // AES-128-CBC 解密
         logger.info("创建解密器: aes-128-cbc");
-        const decipher = crypto.createDecipheriv(
-          "aes-128-cbc",
-          sessionKeyBuffer,
-          ivBuffer
-        );
+        let decipher;
+        try {
+          decipher = crypto.createDecipheriv(
+            "aes-128-cbc",
+            sessionKeyBuffer,
+            ivBuffer
+          );
+          logger.info("解密器创建成功");
+        } catch (cipherError) {
+          logger.error(`创建解密器失败: ${cipherError.message}`);
+          logger.error(`错误堆栈: ${cipherError.stack}`);
+          throw cipherError;
+        }
+
         decipher.setAutoPadding(true);
         logger.info("设置自动填充: true");
 
         logger.info("开始解密...");
-        let decrypted = decipher.update(encryptedBuffer, null, "utf8");
-        decrypted += decipher.final("utf8");
+        let decrypted;
+        try {
+          decrypted = decipher.update(encryptedBuffer, null, "utf8");
+          logger.info(`解密第一阶段完成，获取到 ${decrypted.length} 字符`);
+
+          const finalPart = decipher.final("utf8");
+          logger.info(`解密最终阶段完成，获取到额外 ${finalPart.length} 字符`);
+
+          decrypted += finalPart;
+        } catch (decryptError) {
+          logger.error(`解密操作失败: ${decryptError.message}`);
+          logger.error(`错误堆栈: ${decryptError.stack}`);
+
+          // 尝试使用不同的编码重新解密
+          logger.info("尝试使用二进制模式重新解密...");
+          try {
+            decipher = crypto.createDecipheriv(
+              "aes-128-cbc",
+              sessionKeyBuffer,
+              ivBuffer
+            );
+            decipher.setAutoPadding(true);
+
+            const binaryResult = Buffer.concat([
+              decipher.update(encryptedBuffer),
+              decipher.final(),
+            ]);
+
+            logger.info(
+              `二进制模式解密成功，结果长度: ${binaryResult.length} 字节`
+            );
+            logger.info(`尝试将二进制结果转换为 UTF-8...`);
+
+            decrypted = binaryResult.toString("utf8");
+            logger.info(`转换成功，获取到 ${decrypted.length} 字符`);
+          } catch (retryError) {
+            logger.error(`二进制模式解密也失败: ${retryError.message}`);
+            throw decryptError; // 抛出原始错误
+          }
+        }
+
         logger.info(`解密完成，解密后数据长度: ${decrypted.length}`);
         logger.info(`解密数据前30个字符: ${decrypted.substring(0, 30)}...`);
 
+        // 检查解密结果是否为有效的 JSON 格式
+        if (!decrypted.startsWith("{") || !decrypted.endsWith("}")) {
+          logger.error(
+            `解密结果不是有效的 JSON 格式: ${decrypted.substring(0, 100)}...`
+          );
+        }
+
         // 解析 JSON
         logger.info("解析 JSON...");
-        const phoneData = JSON.parse(decrypted);
-        logger.info(`JSON解析成功: ${JSON.stringify(phoneData, null, 2)}`);
+        let phoneData;
+        try {
+          phoneData = JSON.parse(decrypted);
+          logger.info(
+            `JSON解析成功，包含字段: ${Object.keys(phoneData).join(", ")}`
+          );
+          logger.info(`手机号信息: ${JSON.stringify(phoneData, null, 2)}`);
+        } catch (jsonError) {
+          logger.error(`JSON解析失败: ${jsonError.message}`);
+          logger.error(`解密后的原始数据: ${decrypted}`);
+          throw jsonError;
+        }
 
         // 验证 appId
-        if (phoneData.watermark && phoneData.watermark.appid !== this.appId) {
-          logger.error(
-            `appId 不匹配，期望: ${this.appId}, 实际: ${phoneData.watermark.appid}`
+        if (phoneData.watermark) {
+          logger.info(`水印信息: ${JSON.stringify(phoneData.watermark)}`);
+          if (phoneData.watermark.appid !== this.appId) {
+            logger.error(
+              `appId 不匹配，期望: ${this.appId}, 实际: ${phoneData.watermark.appid}`
+            );
+            throw new Error("appId 不匹配，数据可能被篡改");
+          }
+          logger.info("appId 验证通过");
+          logger.info(
+            `水印时间戳: ${phoneData.watermark.timestamp}, 对应时间: ${new Date(
+              phoneData.watermark.timestamp * 1000
+            ).toISOString()}`
           );
-          throw new Error("appId 不匹配，数据可能被篡改");
+        } else {
+          logger.warn("解密数据中没有水印信息");
         }
-        logger.info("appId 验证通过");
 
         return phoneData;
       } catch (decryptError) {
@@ -240,7 +344,7 @@ class WechatService {
     } catch (error) {
       logger.error(`解密手机号数据失败: ${error.message}`);
       logger.error(`错误堆栈: ${error.stack}`);
-      throw new Error("解密手机号数据失败");
+      throw new Error(`解密手机号数据失败: ${error.message}`);
     }
   }
 
