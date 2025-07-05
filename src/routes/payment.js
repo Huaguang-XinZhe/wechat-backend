@@ -527,10 +527,22 @@ router.post("/transferToUser", authMiddleware, async (req, res, next) => {
       transferAmount: Math.round(amount * 100), // 转换为分
       openid: user.openid,
       transferRemark: transfer_remark,
-      transferSceneId: "1000", // 转账场景ID
-      userRecvPerception: "收到转账", // 用户收款感知描述
+      transferSceneId: "1000", // 转账场景ID，1000 为现金营销场景
+      // 移除 userRecvPerception 字段，让微信支付根据场景自动展示默认内容
       notifyUrl: process.env.TRANSFER_NOTIFY_URL, // 转账回调地址（可选）
       testMode: testMode, // 明确传递测试模式参数
+
+      // 添加转账场景报备信息（必须）
+      transferSceneReportInfos: [
+        {
+          infoType: "活动名称",
+          infoContent: "商家转账测试活动",
+        },
+        {
+          infoType: "奖励说明",
+          infoContent: "测试转账奖励",
+        },
+      ],
     };
 
     try {

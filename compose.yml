@@ -3,6 +3,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # 不加的话，默认的镜像命名规则是：
+    # 项目名称_服务名称:标签
+    image: wechat-backend:latest
     container_name: wechat-backend
     restart: always
     ports:
