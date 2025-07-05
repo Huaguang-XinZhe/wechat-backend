@@ -291,7 +291,7 @@ class WechatTransferService {
       createTime: new Date().toISOString(),
       status: "success",
       mock: true,
-      amount: transferAmount / 100, // 转换为元
+      amount: transferAmount / 100, // 转换为元，10分 = 0.1元
     };
 
     logger.info(`模拟转账结果: ${JSON.stringify(mockResult)}`);

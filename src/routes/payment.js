@@ -524,7 +524,7 @@ router.post("/transferToUser", authMiddleware, async (req, res, next) => {
     // 构建转账数据
     const transferData = {
       outBillNo,
-      transferAmount: Math.round(amount * 100), // 转换为分
+      transferAmount: Math.round(amount * 100), // 转换为分，0.1元 = 10分
       openid: user.openid,
       transferRemark: transfer_remark,
       transferSceneId: "1000", // 转账场景ID，1000 为现金营销场景
