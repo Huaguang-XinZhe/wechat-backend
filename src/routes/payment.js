@@ -496,7 +496,7 @@ router.post("/wxMiniPay", authMiddleware, async (req, res, next) => {
 
 // 商家转账验证 schema
 const transferSchema = Joi.object({
-  amount: Joi.number().positive().precision(2).default(0.01),
+  amount: Joi.number().positive().precision(2).default(0.1),
   transfer_remark: Joi.string().default("商家转账测试"),
   testMode: Joi.boolean().default(true),
 });
