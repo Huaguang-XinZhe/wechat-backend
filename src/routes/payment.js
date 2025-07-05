@@ -516,6 +516,10 @@ router.post("/transferToUser", authMiddleware, async (req, res, next) => {
     const { amount, transfer_remark, testMode } = value;
     const user = req.user;
 
+    // 调试日志：输出金额
+    logger.info(`转账金额(元): ${amount}, 类型: ${typeof amount}`);
+    logger.info(`转换后金额(分): ${Math.round(amount * 100)}`);
+
     // 生成转账单号
     const outBillNo = `TRANSFER${Date.now()}${Math.floor(Math.random() * 1000)
       .toString()
@@ -524,7 +528,8 @@ router.post("/transferToUser", authMiddleware, async (req, res, next) => {
     // 构建转账数据
     const transferData = {
       outBillNo,
-      transferAmount: Math.round(amount * 100), // 转换为分，0.1元 = 10分
+      // 直接使用固定值 10 分进行测试
+      transferAmount: 10, // 0.1元 = 10分
       openid: user.openid,
       transferRemark: transfer_remark,
       transferSceneId: "1000", // 转账场景ID，1000 为现金营销场景

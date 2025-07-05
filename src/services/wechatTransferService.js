@@ -106,6 +106,11 @@ class WechatTransferService {
         testMode = false, // 新增测试模式参数
       } = transferData;
 
+      // 调试日志：输出转账金额
+      logger.info(
+        `转账金额(分): ${transferAmount}, 类型: ${typeof transferAmount}`
+      );
+
       // 如果明确要求使用测试模式，则直接返回模拟结果
       if (testMode === true) {
         logger.info("前端请求使用测试模式，返回模拟转账结果");
