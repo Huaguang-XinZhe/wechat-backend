@@ -528,7 +528,7 @@ router.post("/transferToUser", authMiddleware, async (req, res, next) => {
       openid: user.openid,
       transferRemark: transfer_remark,
       transferSceneId: "1000", // 转账场景ID，1000 为现金营销场景
-      // 移除 userRecvPerception 字段，让微信支付根据场景自动展示默认内容
+      userRecvPerception: "活动奖励", // 添加用户收款感知描述，使用"活动奖励"
       notifyUrl: process.env.TRANSFER_NOTIFY_URL, // 转账回调地址（可选）
       testMode: testMode, // 明确传递测试模式参数
 

@@ -101,6 +101,7 @@ class WechatTransferService {
         transferRemark = "商家转账",
         transferSceneId = "1000", // 转账场景ID
         transferSceneReportInfos = [], // 添加场景报备信息参数
+        userRecvPerception = "活动奖励", // 用户收款感知描述，默认使用"活动奖励"
         notifyUrl,
         testMode = false, // 新增测试模式参数
       } = transferData;
@@ -129,12 +130,8 @@ class WechatTransferService {
         openid: openid,
         transfer_amount: transferAmount,
         transfer_remark: transferRemark,
+        user_recv_perception: userRecvPerception, // 添加用户收款感知字段
       };
-
-      // 如果有收款感知描述，则添加
-      if (userRecvPerception) {
-        requestBody.user_recv_perception = userRecvPerception;
-      }
 
       // 如果有收款人姓名，需要加密
       if (userName) {
