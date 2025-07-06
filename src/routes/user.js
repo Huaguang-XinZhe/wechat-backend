@@ -5,6 +5,8 @@ const router = express.Router();
 const UserAdapterService = require("../services/userAdapterService");
 const { authMiddleware, optionalAuth } = require("../middleware/auth");
 const logger = require("../utils/logger");
+const { UmsMember, UmsMemberWechat } = require("../models/legacy");
+const { legacySequelize } = require("../config/legacyDatabase");
 
 // 获取用户资料 schema
 const getUserProfileSchema = Joi.object({
@@ -195,6 +197,95 @@ router.delete("/account", authMiddleware, async (req, res, next) => {
     });
   } catch (error) {
     logger.error("删除用户账号失败:", error);
+    next(error);
+  }
+});
+
+// 获取单个用户的邀请信息
+router.get("/invite/:openid", async (req, res, next) => {
+  try {
+    const { openid } = req.params;
+
+    // 查询微信用户信息
+    const wechatUser = await UmsMemberWechat.findByPk(openid);
+
+    if (!wechatUser) {
+      return res.status(404).json({
+        success: false,
+        message: "用户不存在",
+        code: 404,
+      });
+    }
+
+    // 将 openid 转换为 base64 编码用于查询 ums_member 表
+    const base64Openid = Buffer.from(openid).toString("base64");
+
+    // 查询用户基本信息
+    const memberUser = await UmsMember.findOne({
+      where: { username: base64Openid },
+    });
+
+    if (!memberUser) {
+      return res.status(404).json({
+        success: false,
+        message: "用户基本信息不存在",
+        code: 404,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "获取用户邀请信息成功",
+      data: {
+        user: {
+          id: memberUser.id,
+          openid: openid,
+          nickname: memberUser.nickname,
+          phone: memberUser.phone,
+          invite_code: wechatUser.invite_code,
+          invite_from: wechatUser.invite_from,
+          create_time: memberUser.create_time,
+        },
+      },
+    });
+  } catch (error) {
+    logger.error("获取用户邀请信息失败:", error);
+    next(error);
+  }
+});
+
+// 获取所有用户的邀请信息
+router.get("/invite/list/all", async (req, res, next) => {
+  try {
+    // 使用 JOIN 查询获取所有用户的邀请信息
+    const users = await legacySequelize.query(
+      `SELECT 
+        w.openid,
+        m.id,
+        m.nickname,
+        m.phone,
+        w.invite_from,
+        w.invite_code,
+        m.create_time
+      FROM 
+        ums_member_wechat w
+      JOIN 
+        ums_member m ON m.username = TO_BASE64(w.openid)
+      ORDER BY 
+        m.create_time DESC`,
+      { type: legacySequelize.QueryTypes.SELECT }
+    );
+
+    res.json({
+      success: true,
+      message: "获取所有用户邀请信息成功",
+      data: {
+        users,
+        total: users.length,
+      },
+    });
+  } catch (error) {
+    logger.error("获取所有用户邀请信息失败:", error);
     next(error);
   }
 });
