@@ -261,9 +261,9 @@ router.get("/invite/list/all", async (req, res, next) => {
     const users = await legacySequelize.query(
       `SELECT 
         w.openid,
-        m.id,
         m.nickname,
         m.phone,
+        m.icon,
         w.invite_from,
         w.invite_code,
         m.create_time
