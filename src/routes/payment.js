@@ -432,6 +432,11 @@ router.post("/wxMiniPay", authMiddleware, async (req, res, next) => {
     const { orderId, amount, total_fee, description } = value;
     const user = req.user;
 
+    // 打印详细调试信息
+    logger.info(
+      `发起微信支付请求: orderId=${orderId}, amount=${amount}, openid=${user.openid}`
+    );
+
     // 查找订单
     let order = null;
     for (const [orderNo, orderData] of orders.entries()) {
@@ -482,6 +487,9 @@ router.post("/wxMiniPay", authMiddleware, async (req, res, next) => {
     logger.info(
       `微信支付测试订单创建成功: ${order.orderNo}, prepayId: ${paymentResult.prepayId}`
     );
+
+    // 记录完整的支付参数以便调试
+    logger.info(`生成的支付参数: ${JSON.stringify(paymentResult.payParams)}`);
 
     res.json({
       success: true,
@@ -617,6 +625,90 @@ router.get("/transfer/:billNo", authMiddleware, async (req, res, next) => {
     });
   } catch (error) {
     logger.error("查询转账结果失败:", error);
+    next(error);
+  }
+});
+
+// 外部订单微信支付验证 schema（适用于老后端创建的订单）
+const externalOrderPaySchema = Joi.object({
+  orderId: Joi.alternatives().try(Joi.number(), Joi.string()).required(),
+  amount: Joi.number().positive().precision(2).required(),
+  total_fee: Joi.number().positive().precision(2).optional(),
+  description: Joi.string().required(),
+});
+
+// 外部订单微信支付接口（专门处理老后端创建的订单）
+router.post("/wxMiniPayExternal", authMiddleware, async (req, res, next) => {
+  try {
+    const { error, value } = externalOrderPaySchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.details[0].message,
+        code: 400,
+      });
+    }
+
+    const { orderId, amount, total_fee, description } = value;
+    const user = req.user;
+
+    // 打印详细调试信息
+    logger.info(
+      `发起外部订单微信支付请求: orderId=${orderId}, amount=${amount}, description=${description}, openid=${user.openid}`
+    );
+
+    // 获取客户端IP
+    const clientIp = req.ip || req.connection.remoteAddress || "127.0.0.1";
+
+    // 生成内部订单号（用于微信支付）
+    const internalOrderNo = `EXT${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, "0")}`;
+
+    // 创建支付订单数据
+    const orderData = {
+      orderNo: internalOrderNo,
+      amount: total_fee || amount, // 优先使用 total_fee，如果没有则使用 amount
+      description: description,
+      openid: user.openid,
+      notifyUrl:
+        process.env.PAYMENT_NOTIFY_URL ||
+        "https://your-domain.com/api/payment/notify",
+      clientIp,
+    };
+
+    // 调用微信支付接口
+    const paymentResult = await wechatService.createPayOrder(orderData);
+
+    // 记录订单映射关系（外部订单ID -> 内部订单号）
+    const externalOrder = {
+      externalOrderId: orderId,
+      internalOrderNo: internalOrderNo,
+      userId: user.id,
+      openid: user.openid,
+      amount: total_fee || amount,
+      description: description,
+      status: "pending",
+      prepayId: paymentResult.prepayId,
+      clientIp,
+      createdAt: new Date(),
+    };
+
+    // 保存外部订单映射
+    orders.set(internalOrderNo, externalOrder);
+
+    logger.info(
+      `外部订单微信支付创建成功: 外部订单=${orderId}, 内部订单=${internalOrderNo}, prepayId: ${paymentResult.prepayId}`
+    );
+
+    // 记录完整的支付参数以便调试
+    logger.info(`生成的支付参数: ${JSON.stringify(paymentResult.payParams)}`);
+
+    res.json({
+      success: true,
+      message: "获取支付参数成功",
+      data: paymentResult.payParams,
+    });
+  } catch (error) {
+    logger.error("外部订单微信支付失败:", error);
     next(error);
   }
 });

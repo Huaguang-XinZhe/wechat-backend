@@ -408,6 +408,33 @@ class WechatService {
       // 确保金额转换为整数分 - 先乘以100再四舍五入，避免浮点数精度问题
       const total_fee = Math.round(amount * 100);
 
+      // 打印环境信息帮助调试
+      logger.info(`正在创建支付订单，运行环境: ${process.env.NODE_ENV}`);
+      logger.info(`支付配置: AppID=${this.appId}, MchID=${this.mchId}`);
+      logger.info(
+        `证书文件状态: 证书=${this.certificate ? "已加载" : "未加载"}, 私钥=${
+          this.privateKey ? "已加载" : "未加载"
+        }`
+      );
+      logger.info(
+        `支付参数: 订单号=${orderNo}, 金额=${amount}元(${total_fee}分), 用户openid=${openid}`
+      );
+
+      // 如果未配置证书或在测试环境，可以返回模拟数据
+      if (
+        (!this.certificate || !this.privateKey) &&
+        process.env.NODE_ENV !== "production"
+      ) {
+        logger.warn("未找到有效的支付证书，将返回模拟支付参数");
+        // 生成模拟 prepayId
+        const mockPrepayId = `test_prepay_${Date.now()}`;
+        // 返回模拟支付参数
+        return {
+          prepayId: mockPrepayId,
+          payParams: this.generateMockPayParams(mockPrepayId),
+        };
+      }
+
       // 微信支付V3 API地址
       const url = "/v3/pay/transactions/jsapi";
       const timestamp = Math.floor(Date.now() / 1000).toString();
@@ -471,6 +498,7 @@ class WechatService {
 
       // 生成小程序支付参数
       const payParams = this.generateMiniProgramPayParamsV3(prepayId);
+      logger.info(`生成支付参数: ${JSON.stringify(payParams)}`);
 
       return {
         prepayId: prepayId,
@@ -478,35 +506,53 @@ class WechatService {
       };
     } catch (error) {
       logger.error("创建微信支付订单失败:", error);
+      if (error.response) {
+        logger.error(`微信API响应: ${JSON.stringify(error.response.data)}`);
+      }
       throw error;
     }
   }
 
   // 生成小程序支付参数 (V3 API)
   generateMiniProgramPayParamsV3(prepayId) {
-    const timeStamp = Math.floor(Date.now() / 1000).toString();
-    const nonceStr = this.generateNonceStr();
+    try {
+      // 重要! timeStamp 必须是字符串类型
+      const timeStamp = Math.floor(Date.now() / 1000).toString();
+      const nonceStr = this.generateNonceStr();
 
-    // V3 API支付参数格式
-    const packageStr = `prepay_id=${prepayId}`;
+      // V3 API支付参数格式
+      const packageStr = `prepay_id=${prepayId}`;
 
-    // 构建签名字符串 (V3 API方式)
-    // 签名串格式：应用id\n时间戳\n随机字符串\n预支付交易会话ID\n
-    const signatureStr = `${this.appId}\n${timeStamp}\n${nonceStr}\n${packageStr}\n`;
+      logger.info("生成支付参数...");
+      logger.info(`appId = ${this.appId}`);
+      logger.info(`timeStamp = ${timeStamp}`);
+      logger.info(`nonceStr = ${nonceStr}`);
+      logger.info(`packageStr = ${packageStr}`);
 
-    // 使用私钥进行签名
-    const sign = crypto.createSign("RSA-SHA256");
-    sign.update(signatureStr);
-    sign.end();
-    const paySign = sign.sign(this.privateKey, "base64");
+      // 构建签名字符串 (V3 API方式)
+      // 签名串格式：应用id\n时间戳\n随机字符串\n预支付交易会话ID\n
+      const signatureStr = `${this.appId}\n${timeStamp}\n${nonceStr}\n${packageStr}\n`;
+      logger.info(`签名字符串 = ${signatureStr}`);
 
-    return {
-      timeStamp,
-      nonceStr,
-      package: packageStr,
-      signType: "RSA",
-      paySign,
-    };
+      // 使用私钥进行签名
+      const sign = crypto.createSign("RSA-SHA256");
+      sign.update(signatureStr);
+      sign.end();
+      const paySign = sign.sign(this.privateKey, "base64");
+      logger.info(`签名结果 = ${paySign.substring(0, 20)}...`);
+
+      // 返回符合微信支付规范的参数对象
+      return {
+        timeStamp: timeStamp,
+        nonceStr: nonceStr,
+        package: packageStr,
+        signType: "RSA",
+        paySign: paySign,
+      };
+    } catch (error) {
+      logger.error("生成支付参数出错:", error);
+      throw error;
+    }
   }
 
   // 生成V3 API签名
@@ -533,18 +579,21 @@ class WechatService {
 
   // 生成模拟支付参数（测试环境使用）
   generateMockPayParams(prepayId) {
+    // 确保timeStamp是字符串类型
     const timeStamp = Math.floor(Date.now() / 1000).toString();
     const nonceStr = this.generateNonceStr();
     const packageStr = `prepay_id=${prepayId}`;
 
+    logger.info("生成模拟支付参数...");
+    logger.info(`timeStamp = ${timeStamp} (${typeof timeStamp})`);
+
+    // 模拟支付参数，格式与正式参数保持一致
     return {
-      timeStamp,
-      nonceStr,
+      timeStamp: timeStamp, // 确保是字符串
+      nonceStr: nonceStr,
       package: packageStr,
-      signType: "MD5",
-      paySign: `mock_pay_sign_${Date.now()}_${Math.random()
-        .toString(36)
-        .substr(2, 9)}`,
+      signType: "RSA",
+      paySign: `mock_sign_${Date.now()}`,
     };
   }
 
