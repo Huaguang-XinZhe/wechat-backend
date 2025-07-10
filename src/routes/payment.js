@@ -8,28 +8,18 @@ const wechatTransferRouter = require("./wechatTransfer");
 const paymentTestRouter = require("./paymentTest");
 const paymentNotifyRouter = require("./paymentNotify");
 
-// 挂载订单相关路由
+// 为了兼容原有接口，先挂载具体的路由处理
+router.use("/", ordersRouter);        // 处理 /create
+router.use("/", wechatPayRouter);     // 处理 /wxMiniPay, /wxMiniPayExternal 等
+router.use("/", wechatTransferRouter); // 处理 /transferToUser
+router.use("/", paymentTestRouter);   // 处理 /createTestOrder
+router.use("/", paymentNotifyRouter); // 处理 /notify
+
+// 挂载分组路由（这些路径会有前缀）
 router.use("/order", ordersRouter);
 router.use("/orders", ordersRouter);
-
-// 挂载微信支付相关路由
 router.use("/pay", wechatPayRouter);
-
-// 挂载微信转账相关路由
 router.use("/transfer", wechatTransferRouter);
-
-// 挂载测试相关路由
 router.use("/test", paymentTestRouter);
-
-// 挂载回调处理路由
-router.use("/", paymentNotifyRouter);
-
-// 为了兼容原有接口，保留一些直接挂载的路由
-router.use("/create", ordersRouter);
-router.use("/wxMiniPay", wechatPayRouter);
-router.use("/wxMiniPayExternal", wechatPayRouter);
-router.use("/updateExternalOrderStatus", wechatPayRouter);
-router.use("/transferToUser", wechatTransferRouter);
-router.use("/createTestOrder", paymentTestRouter);
 
 module.exports = router; 
