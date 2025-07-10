@@ -652,21 +652,30 @@ router.post("/wxMiniPayExternal", authMiddleware, async (req, res, next) => {
     const { orderId, amount, total_fee, description } = value;
     const user = req.user;
 
+    // 检测是否为调试模式（金额为 0.1 元）
+    const isDebugMode = amount === 0.1 || total_fee === 0.1;
+    const finalAmount = total_fee || amount;
+
     // 打印详细调试信息
     logger.info(
-      `发起外部订单微信支付请求: orderId=${orderId}, amount=${amount}, description=${description}, openid=${user.openid}`
+      `发起外部订单微信支付请求: orderId=${orderId}, amount=${amount}, total_fee=${total_fee}, finalAmount=${finalAmount}, isDebugMode=${isDebugMode}, description=${description}, openid=${user.openid}`
     );
+
+    // 调试模式特殊提示
+    if (isDebugMode) {
+      logger.info(`🔧 检测到调试模式支付，金额: ${finalAmount} 元`);
+    }
 
     // 获取客户端IP
     const clientIp = req.ip || req.connection.remoteAddress || "127.0.0.1";
 
     // 生成内部订单号（用于微信支付）
-    const internalOrderNo = `EXT${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, "0")}`;
+    const internalOrderNo = `${isDebugMode ? 'DEBUG' : 'EXT'}${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, "0")}`;
 
     // 创建支付订单数据
     const orderData = {
       orderNo: internalOrderNo,
-      amount: total_fee || amount, // 优先使用 total_fee，如果没有则使用 amount
+      amount: finalAmount,
       description: description,
       openid: user.openid,
       notifyUrl:
@@ -684,11 +693,12 @@ router.post("/wxMiniPayExternal", authMiddleware, async (req, res, next) => {
       internalOrderNo: internalOrderNo,
       userId: user.id,
       openid: user.openid,
-      amount: total_fee || amount,
+      amount: finalAmount,
       description: description,
       status: "pending",
       prepayId: paymentResult.prepayId,
       clientIp,
+      isDebugMode: isDebugMode, // 标记是否为调试模式
       createdAt: new Date(),
     };
 
@@ -696,7 +706,7 @@ router.post("/wxMiniPayExternal", authMiddleware, async (req, res, next) => {
     orders.set(internalOrderNo, externalOrder);
 
     logger.info(
-      `外部订单微信支付创建成功: 外部订单=${orderId}, 内部订单=${internalOrderNo}, prepayId: ${paymentResult.prepayId}`
+      `外部订单微信支付创建成功: 外部订单=${orderId}, 内部订单=${internalOrderNo}, prepayId: ${paymentResult.prepayId}, 调试模式: ${isDebugMode}`
     );
 
     // 记录完整的支付参数以便调试
@@ -705,7 +715,10 @@ router.post("/wxMiniPayExternal", authMiddleware, async (req, res, next) => {
     res.json({
       success: true,
       message: "获取支付参数成功",
-      data: paymentResult.payParams,
+      data: {
+        ...paymentResult.payParams,
+        debugMode: isDebugMode, // 返回调试模式标识
+      },
     });
   } catch (error) {
     logger.error("外部订单微信支付失败:", error);
