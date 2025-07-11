@@ -214,10 +214,16 @@ async function notifyOldBackend(orderId, userId) {
           logger.info(`第${retryCount}次重试通知老后端...`);
         }
         
-        // 准备请求头
-        const headers = {
-          'Content-Type': 'application/json'
-        };
+        // 创建表单数据
+        const FormData = require('form-data');
+        const form = new FormData();
+        form.append('orderId', orderId);
+        form.append('payType', 2);  // 2表示微信支付
+        
+        logger.info(`请求参数: orderId=${orderId}, payType=2`);
+        
+        // 准备请求头 - 不要手动设置 Content-Type，form-data 会自动设置
+        const headers = {};
         
         // 如果有token，添加到请求头
         if (token) {
@@ -227,10 +233,11 @@ async function notifyOldBackend(orderId, userId) {
           logger.warn('无token请求老后端');
         }
         
-        const response = await axios.post(updateUrl, {
-          orderId: orderId,
-          payType: 2  // 2表示微信支付
-        }, {
+        // 获取表单的headers并合并
+        const formHeaders = form.getHeaders();
+        Object.assign(headers, formHeaders);
+        
+        const response = await axios.post(updateUrl, form, {
           headers,
           timeout: 10000 // 10秒超时
         });
