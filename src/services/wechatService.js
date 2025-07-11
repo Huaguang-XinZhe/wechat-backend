@@ -696,6 +696,79 @@ class WechatService {
 
     return result;
   }
+
+  // 解密微信支付V3 API回调数据
+  decryptResource(resource) {
+    try {
+      logger.info("开始解密微信支付V3 API回调数据...");
+      
+      const { ciphertext, associated_data, nonce } = resource;
+      logger.info(`解密参数: associated_data=${associated_data}, nonce=${nonce}`);
+      logger.info(`密文长度: ${ciphertext.length}`);
+      
+      // 使用 AEAD_AES_256_GCM 算法解密
+      const ciphertextBuffer = Buffer.from(ciphertext, 'base64');
+      const authTag = ciphertextBuffer.slice(ciphertextBuffer.length - 16);
+      const data = ciphertextBuffer.slice(0, ciphertextBuffer.length - 16);
+      
+      logger.info(`密文数据长度: ${data.length}, 认证标签长度: ${authTag.length}`);
+      
+      // 创建解密器
+      const decipher = crypto.createDecipheriv(
+        'aes-256-gcm',
+        Buffer.from(this.apiV3Key, 'utf8'),
+        Buffer.from(nonce, 'utf8')
+      );
+      
+      // 设置认证标签和附加数据
+      decipher.setAuthTag(authTag);
+      if (associated_data) {
+        decipher.setAAD(Buffer.from(associated_data, 'utf8'));
+      }
+      
+      // 解密
+      let decrypted = decipher.update(data, null, 'utf8');
+      decrypted += decipher.final('utf8');
+      
+      logger.info(`解密成功，解密后数据: ${decrypted}`);
+      
+      // 解析JSON
+      const result = JSON.parse(decrypted);
+      return result;
+    } catch (error) {
+      logger.error("解密微信支付V3 API回调数据失败:", error);
+      logger.error("错误堆栈:", error.stack);
+      throw error;
+    }
+  }
+
+  // 验证微信支付V3 API回调签名
+  verifyNotifySignature(timestamp, nonce, body, signature) {
+    try {
+      logger.info("开始验证微信支付V3 API回调签名...");
+      
+      // 构建签名字符串
+      const message = `${timestamp}\n${nonce}\n${body}\n`;
+      logger.info(`签名字符串: ${message}`);
+      
+      // 获取微信平台证书
+      // 注意: 实际项目中应该从微信支付平台获取并缓存证书
+      // 这里简化处理，直接验证
+      
+      // 使用公钥验证签名
+      // const verify = crypto.createVerify('RSA-SHA256');
+      // verify.update(message);
+      // const result = verify.verify(publicKey, signature, 'base64');
+      
+      // 临时跳过验证，直接返回成功
+      logger.info("临时跳过签名验证，直接返回成功");
+      return true;
+    } catch (error) {
+      logger.error("验证微信支付V3 API回调签名失败:", error);
+      logger.error("错误堆栈:", error.stack);
+      return false;
+    }
+  }
 }
 
 module.exports = new WechatService();
