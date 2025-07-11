@@ -80,6 +80,12 @@ router.post("/notify", (req, res) => {
                 
                 logger.info(`订单金额验证通过: 预期=${order.amount}, 实际=${total_fee}`);
                 
+                // 检查订单是否已经支付，避免重复处理
+                if (order.status === "paid") {
+                  logger.info(`订单已经是支付状态，跳过处理: ${out_trade_no}, 交易号: ${order.transactionId || '无'}`);
+                  return res.json({ code: "SUCCESS", message: "OK" });
+                }
+                
                 // 更新内部订单状态
                 order.status = "paid";
                 order.paidAt = new Date();
@@ -177,10 +183,20 @@ router.post("/notify", (req, res) => {
   }
 });
 
+// 用于存储已通知成功的订单ID，避免重复通知
+const notifiedOrders = new Set();
+
 // 通知老后端更新订单状态
 async function notifyOldBackend(orderId, userId) {
   try {
+    // 检查是否已经成功通知过该订单
+    if (notifiedOrders.has(orderId)) {
+      logger.info(`订单 ${orderId} 已经成功通知过老后端，跳过重复通知`);
+      return true;
+    }
+    
     logger.info(`开始通知老后端更新订单状态: 订单ID=${orderId}, 支付方式=微信支付, 用户ID=${userId}`);
+    logger.info(`⚠️ 注意: 前端可能已经调用了老后端的支付成功接口，这里可能是重复通知`);
     
     // 查找用户的token
     // 在实际系统中，应该从用户会话或数据库中获取token
@@ -246,17 +262,44 @@ async function notifyOldBackend(orderId, userId) {
         
         if (response.data && response.data.code === 200) {
           logger.info("通知老后端成功");
+          // 记录已成功通知的订单ID
+          notifiedOrders.add(orderId);
           success = true;
           return true;
         } else {
           lastError = new Error(`通知老后端返回异常: ${JSON.stringify(response.data)}`);
           logger.warn(lastError.message);
+          
+          // 如果是特定错误（如库存不足），不再重试
+          if (response.data && 
+             (response.data.code === 500 && response.data.message && 
+              (response.data.message.includes("库存不足") || 
+               response.data.message.includes("inventory") || 
+               response.data.message.includes("stock")))) {
+            logger.warn("检测到库存不足错误，停止重试");
+            // 尽管有错误，但我们仍然标记为"已通知"，避免重复触发相同的错误
+            notifiedOrders.add(orderId);
+            return false;
+          }
         }
       } catch (retryError) {
         lastError = retryError;
         logger.error(`通知老后端失败(尝试${retryCount + 1}/${maxRetries}): ${retryError.message}`);
         if (retryError.response) {
           logger.error(`错误状态码: ${retryError.response.status}, 响应: ${JSON.stringify(retryError.response.data)}`);
+          
+          // 检查是否是特定错误（如库存不足）
+          if (retryError.response.data && 
+              (retryError.response.status === 400 || retryError.response.status === 500) && 
+              retryError.response.data.message && 
+              (retryError.response.data.message.includes("库存不足") || 
+               retryError.response.data.message.includes("inventory") || 
+               retryError.response.data.message.includes("stock"))) {
+            logger.warn("检测到库存不足错误，停止重试");
+            // 尽管有错误，但我们仍然标记为"已通知"，避免重复触发相同的错误
+            notifiedOrders.add(orderId);
+            return false;
+          }
         }
       }
       
