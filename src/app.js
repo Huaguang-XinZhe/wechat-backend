@@ -92,9 +92,21 @@ const limiter = rateLimit({
 });
 app.use("/api/", limiter);
 
-// 解析请求体
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+// 条件性解析请求体 - 跳过微信支付回调路径，避免 XML 数据被预先解析
+app.use((req, res, next) => {
+  // 跳过微信支付回调路径的 body parsing
+  if (req.url.includes('/payment/notify')) {
+    return next();
+  }
+  
+  // 对其他路径应用 body parser
+  express.json({ limit: "10mb" })(req, res, () => {
+    express.urlencoded({ extended: true, limit: "10mb" })(req, res, next);
+  });
+});
+
+// 为微信支付回调创建特殊的路由处理，跳过 body parser
+// app.use("/api/payment/notify", paymentNotifyRouter); // 移除此行
 
 // 请求日志
 app.use((req, res, next) => {

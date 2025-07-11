@@ -600,20 +600,40 @@ class WechatService {
   // 验证支付回调
   verifyPaymentNotify(xmlData) {
     try {
+      logger.info("开始解析XML数据...");
+      logger.info(`原始XML数据: ${xmlData}`);
+      
       const data = this.parseXMLSync(xmlData);
+      logger.info(`解析后的数据: ${JSON.stringify(data)}`);
+
+      // 检查是否有签名
+      if (!data.sign) {
+        logger.error("回调数据中没有签名字段");
+        throw new Error("回调数据中没有签名字段");
+      }
 
       // 验证签名
       const sign = data.sign;
       delete data.sign;
+      
+      logger.info("开始验证签名...");
+      logger.info(`接收到的签名: ${sign}`);
+      
       const calculatedSign = this.generateSign(data);
+      logger.info(`计算出的签名: ${calculatedSign}`);
 
       if (sign !== calculatedSign) {
+        logger.error("支付回调签名验证失败");
+        logger.error(`期望签名: ${calculatedSign}`);
+        logger.error(`实际签名: ${sign}`);
         throw new Error("支付回调签名验证失败");
       }
 
+      logger.info("签名验证成功");
       return data;
     } catch (error) {
       logger.error("验证支付回调失败:", error);
+      logger.error("错误堆栈:", error.stack);
       throw error;
     }
   }

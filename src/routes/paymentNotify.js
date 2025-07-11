@@ -8,18 +8,28 @@ const { orders } = require("../models/orderModels");
 // 微信支付回调通知
 router.post("/notify", (req, res) => {
   try {
+    logger.info("=== 微信支付回调开始处理 ===");
+    logger.info(`请求头: ${JSON.stringify(req.headers)}`);
+    logger.info(`请求体类型: ${typeof req.body}`);
+    
     // 获取原始XML数据
     let xmlData = "";
+    
     req.on("data", (chunk) => {
       xmlData += chunk;
+      logger.info(`接收数据块，当前长度: ${xmlData.length}`);
     });
 
     req.on("end", async () => {
       try {
+        logger.info(`完整XML数据长度: ${xmlData.length}`);
+        logger.info(`XML数据内容: ${xmlData.substring(0, 500)}${xmlData.length > 500 ? '...' : ''}`);
         logger.info("收到微信支付回调通知");
 
         // 验证回调数据
+        logger.info("开始验证回调数据...");
         const notifyData = wechatService.verifyPaymentNotify(xmlData);
+        logger.info(`验证通过，回调数据: ${JSON.stringify(notifyData)}`);
 
         if (notifyData.return_code !== "SUCCESS") {
           logger.error("微信支付回调失败:", notifyData.return_msg);
@@ -43,6 +53,8 @@ router.post("/notify", (req, res) => {
         const transactionId = notifyData.transaction_id;
         const totalFee = parseInt(notifyData.total_fee) / 100; // 转换为元
 
+        logger.info(`订单号: ${orderNo}, 交易号: ${transactionId}, 金额: ${totalFee}元`);
+
         // 查找订单
         const order = orders.get(orderNo);
         if (!order) {
@@ -51,6 +63,8 @@ router.post("/notify", (req, res) => {
             "<xml><return_code><![CDATA[FAIL]]></return_code><return_msg><![CDATA[订单不存在]]></return_msg></xml>"
           );
         }
+
+        logger.info(`找到订单: ${JSON.stringify(order)}`);
 
         // 验证金额
         if (Math.abs(order.amount - totalFee) > 0.01) {
@@ -71,21 +85,32 @@ router.post("/notify", (req, res) => {
           orders.set(orderNo, order);
 
           logger.info(`订单支付成功: ${orderNo}, 交易号: ${transactionId}`);
+        } else {
+          logger.info(`订单已经是支付状态: ${orderNo}`);
         }
 
         // 返回成功响应
+        logger.info("返回成功响应给微信");
         res.send(
           "<xml><return_code><![CDATA[SUCCESS]]></return_code><return_msg><![CDATA[OK]]></return_msg></xml>"
         );
+        logger.info("=== 微信支付回调处理完成 ===");
       } catch (error) {
         logger.error("处理微信支付回调失败:", error);
+        logger.error("错误堆栈:", error.stack);
         res.send(
           "<xml><return_code><![CDATA[FAIL]]></return_code><return_msg><![CDATA[处理失败]]></return_msg></xml>"
         );
       }
     });
+
+    req.on("error", (error) => {
+      logger.error("请求流错误:", error);
+    });
+
   } catch (error) {
     logger.error("微信支付回调处理失败:", error);
+    logger.error("错误堆栈:", error.stack);
     res.send(
       "<xml><return_code><![CDATA[FAIL]]></return_code><return_msg><![CDATA[系统错误]]></return_msg></xml>"
     );
