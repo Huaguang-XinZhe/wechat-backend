@@ -10,6 +10,7 @@ const {
   externalOrderPaySchema,
   generateOrderNo,
   getClientIp,
+  users,
 } = require("../models/orderModels");
 
 // 微信小程序支付测试
@@ -111,6 +112,31 @@ router.post("/wxMiniPayExternal", authMiddleware, async (req, res, next) => {
 
     const { orderId, amount, total_fee, description } = value;
     const user = req.user;
+    
+    // 获取请求中的token，用于后续支付回调
+    const token = req.headers.authorization ? req.headers.authorization.replace('Bearer ', '') : null;
+    if (token) {
+      logger.info(`获取到用户token: ${token.substring(0, 20)}...`);
+      
+      // 保存用户token到用户会话
+      if (!users.has(user.id)) {
+        users.set(user.id, {
+          ...user,
+          token: token
+        });
+        logger.info(`保存用户token到会话: userId=${user.id}`);
+      } else {
+        // 更新现有用户的token
+        const existingUser = users.get(user.id);
+        users.set(user.id, {
+          ...existingUser,
+          token: token
+        });
+        logger.info(`更新用户token: userId=${user.id}`);
+      }
+    } else {
+      logger.warn(`未找到用户token: userId=${user.id}`);
+    }
 
     // 检测是否为调试模式（金额为 0.1 元）
     const isDebugMode = amount === 0.1 || total_fee === 0.1;
