@@ -1,11 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const WechatService = require('../services/wechatService');
+const wechatService = require('../services/wechatService');
 const logger = require('../utils/logger');
 const auth = require('../middleware/auth');
 
-// 实例化微信服务
-const wechatService = new WechatService();
+// 不再需要实例化wechatService，因为它已经是一个实例了
 
 /**
  * @api {get} /api/wx-delivery/companies 获取物流公司列表
