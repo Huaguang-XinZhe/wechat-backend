@@ -74,28 +74,84 @@ class WechatBaseService {
         return this.accessTokenCache.token;
       }
 
-      // 直接构建完整URL
-      const url = 'https://api.weixin.qq.com/cgi-bin/token';
-      const params = {
-        grant_type: "client_credential",
-        appid: this.appId,
-        secret: this.appSecret,
-      };
+      // 测试DNS解析
+      try {
+        const dns = require('dns');
+        const dnsStart = Date.now();
+        logger.info('开始DNS解析: api.weixin.qq.com');
+        const addresses = await new Promise((resolve, reject) => {
+          dns.resolve4('api.weixin.qq.com', (err, addresses) => {
+            if (err) reject(err);
+            else resolve(addresses);
+          });
+        });
+        const dnsEnd = Date.now();
+        logger.info(`DNS解析完成，耗时: ${dnsEnd - dnsStart}ms, IP地址: ${addresses.join(', ')}`);
+      } catch (dnsError) {
+        logger.error(`DNS解析失败: ${dnsError.message}`);
+      }
 
-      logger.info(`开始获取access_token: ${url}`);
-      logger.info(`请求参数: ${JSON.stringify(params)}`);
+      // 直接构建完整URL
+      const apiUrl = `https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${this.appId}&secret=${this.appSecret}`;
+      logger.info(`开始获取access_token: ${apiUrl}`);
       
-      // 使用更简洁的请求方式
+      // 使用原生https模块
+      const https = require('https');
+      const url = require('url');
+      const parsedUrl = url.parse(apiUrl);
+      
       const startTime = Date.now();
-      const response = await axios.get(url, { 
-        params,
-        timeout: 10000 // 设置10秒超时
-      });
-      const endTime = Date.now();
+      logger.info(`开始发送HTTPS请求: ${startTime}`);
       
-      logger.info(`请求耗时: ${endTime - startTime}ms`);
-      logger.info(`微信API响应: ${JSON.stringify(response.data)}`);
-      const data = response.data;
+      // 发送请求
+      const data = await new Promise((resolve, reject) => {
+        const req = https.request({
+          hostname: parsedUrl.hostname,
+          path: parsedUrl.path,
+          method: 'GET',
+          timeout: 10000, // 10秒超时
+          headers: {
+            'User-Agent': 'Node.js/https',
+            'Accept': 'application/json'
+          }
+        }, (res) => {
+          logger.info(`响应状态码: ${res.statusCode}`);
+          logger.info(`响应头: ${JSON.stringify(res.headers)}`);
+          
+          let responseData = '';
+          res.on('data', (chunk) => {
+            responseData += chunk;
+          });
+          
+          res.on('end', () => {
+            const endTime = Date.now();
+            logger.info(`请求耗时: ${endTime - startTime}ms`);
+            
+            try {
+              const jsonData = JSON.parse(responseData);
+              resolve(jsonData);
+            } catch (e) {
+              logger.error(`解析JSON失败: ${e.message}`);
+              reject(e);
+            }
+          });
+        });
+        
+        req.on('error', (e) => {
+          logger.error(`请求错误: ${e.message}`);
+          reject(e);
+        });
+        
+        req.on('timeout', () => {
+          logger.error('请求超时');
+          req.destroy();
+          reject(new Error('请求超时'));
+        });
+        
+        req.end();
+      });
+      
+      logger.info(`微信API响应: ${JSON.stringify(data)}`);
 
       if (data.errcode) {
         logger.error(`获取access_token失败: ${data.errcode} - ${data.errmsg}`);
@@ -112,16 +168,6 @@ class WechatBaseService {
       return data.access_token;
     } catch (error) {
       logger.error(`获取access_token失败: ${error.message || error}`);
-      
-      if (error.code === 'ECONNABORTED') {
-        logger.error('获取access_token请求超时');
-      } else if (error.response) {
-        logger.error(`HTTP状态码: ${error.response.status}`);
-        logger.error(`响应数据: ${JSON.stringify(error.response.data)}`);
-      } else if (error.request) {
-        logger.error('未收到响应，可能是网络问题');
-        logger.error(`请求详情: ${JSON.stringify(error.request._currentUrl || error.request)}`);
-      }
       
       // 返回模拟数据
       return `mock_access_token_${Date.now()}`;
