@@ -126,16 +126,36 @@ class WechatDeliveryService extends WechatBaseService {
         };
       }
       
-      // 微信添加物流信息API
-      const url = `https://api.weixin.qq.com/cgi-bin/express/delivery/open_msg/add_order?access_token=${accessToken}`;
+      // 微信添加物流信息API - 根据最新官方文档更新URL
+      const url = `https://api.weixin.qq.com/wxa/sec/order/upload_shipping_info?access_token=${accessToken}`;
       
-      // 构建请求数据
+      // 获取当前时间，格式为RFC 3339
+      const now = new Date();
+      const uploadTime = now.toISOString().replace('Z', '+00:00');
+      
+      // 构建请求数据 - 根据最新官方文档更新请求格式
       const requestData = {
-        order_id,
-        delivery_id,
-        waybill_id,
-        delivery_status: 0, // 0: 待揽收, 1: 已揽收, 2: 运输中, 3: 派送中, 4: 已签收, 5: 异常
-        upload_time: Math.floor(Date.now() / 1000)
+        "order_key": {
+          "order_number_type": 1,         // 使用商户侧单号
+          "mchid": this.mchId || "",      // 商户号
+          "out_trade_no": order_id        // 商户订单号
+        },
+        "delivery_mode": 1,               // 统一发货
+        "logistics_type": 1,              // 实体物流配送
+        "shipping_list": [
+          {
+            "tracking_no": waybill_id,    // 物流单号
+            "express_company": delivery_id, // 物流公司编码
+            "item_desc": "订单商品",      // 商品描述
+            "contact": {
+              "consignor_contact": "138****0000" // 寄件人联系方式
+            }
+          }
+        ],
+        "upload_time": uploadTime,        // 上传时间
+        "payer": {
+          "openid": "mock_openid"         // 用户openid，实际应该从订单中获取
+        }
       };
       
       // 调用微信API

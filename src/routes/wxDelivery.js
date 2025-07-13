@@ -85,12 +85,15 @@ router.post('/add', adminAuthMiddleware, async (req, res) => {
       });
     }
     
-    // 调用微信添加物流信息API
-    const result = await wechatService.addDeliveryInfo(accessToken, {
+    // 构建物流信息数据
+    const deliveryData = {
       order_id,
       delivery_id,
       waybill_id
-    });
+    };
+    
+    // 调用微信添加物流信息API
+    const result = await wechatService.addDeliveryInfo(accessToken, deliveryData);
     
     res.json(result);
   } catch (error) {
