@@ -8,3 +8,11 @@ CREATE TABLE IF NOT EXISTS `ums_member_wechat` (
   KEY `idx_invite_code` (`invite_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COMMENT='微信用户扩展表';
 
+-- 创建微信支付交易记录表
+CREATE TABLE IF NOT EXISTS `wx_payment_transaction` (
+  `transaction_id` varchar(64) NOT NULL COMMENT '微信支付交易号',
+  `openid` varchar(64) NOT NULL COMMENT '用户openid',
+  PRIMARY KEY (`transaction_id`),
+  KEY `idx_openid` (`openid`)
+) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8mb4 COMMENT='微信支付交易记录表';
+

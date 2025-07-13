@@ -3,6 +3,8 @@ const Joi = require("joi");
 // 模拟订单和用户模型（因为Order.js创建有问题，这里临时模拟）
 const orders = new Map();
 const users = new Map();
+// 微信支付交易记录
+const wxPaymentTransactions = new Map();
 
 // 验证 schema
 const createOrderSchema = Joi.object({
@@ -63,6 +65,7 @@ const getClientIp = (req) => {
 module.exports = {
   orders,
   users,
+  wxPaymentTransactions,
   createOrderSchema,
   createTestOrderSchema,
   wxMiniPaySchema,

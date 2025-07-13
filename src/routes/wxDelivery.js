@@ -1,106 +1,110 @@
 const express = require('express');
 const router = express.Router();
-const wechatService = require('../services/wechatService');
 const logger = require('../utils/logger');
-const { authMiddleware } = require('../middleware/auth');
-const jwt = require('jsonwebtoken');
+const mysql = require('mysql2/promise');
+const dbConfig = require('../config/database');
+const wechatDeliveryService = require('../services/wechatDeliveryService');
+const auth = require('../middleware/auth');
 
-/**
- * 管理员认证中间件
- * 验证管理员token，允许管理后台访问微信API
- */
-const adminAuthMiddleware = (req, res, next) => {
+// 根据用户账号获取微信支付交易信息
+router.get('/transaction/:encodedOpenid', auth, async (req, res) => {
   try {
-    const authHeader = req.headers['authorization'];
-    if (!authHeader) {
-      return res.status(401).json({
-        success: false,
-        message: '未提供认证token',
-        code: 401
-      });
-    }
-
-    // 解析token，不验证签名
-    const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : authHeader;
-    const decoded = jwt.decode(token);
+    const { encodedOpenid } = req.params;
+    logger.info(`根据用户账号获取微信支付交易信息: ${encodedOpenid}`);
     
-    if (!decoded) {
-      return res.status(401).json({
-        success: false,
-        message: '无效的token',
-        code: 401
+    // Base64解码获取openid
+    let openid;
+    try {
+      openid = Buffer.from(encodedOpenid, 'base64').toString('utf-8');
+      logger.info(`解码后的openid: ${openid}`);
+    } catch (error) {
+      logger.error(`解码openid失败: ${error.message}`);
+      return res.status(400).json({
+        code: 400,
+        message: '无效的用户账号编码'
       });
     }
-
-    // 检查是否是管理员token
-    if (decoded.sub === 'admin') {
-      // 是管理员token，允许通过
-      logger.info('管理员访问微信API');
-      next();
-    } else {
-      // 不是管理员token，尝试普通用户验证
-      authMiddleware(req, res, next);
+    
+    // 创建数据库连接
+    const connection = await mysql.createConnection(dbConfig);
+    
+    // 查询交易信息
+    const [rows] = await connection.execute(
+      'SELECT * FROM wx_payment_transaction WHERE openid = ? ORDER BY transaction_id DESC LIMIT 1',
+      [openid]
+    );
+    
+    await connection.end();
+    
+    if (rows.length === 0) {
+      logger.warn(`未找到用户交易信息: ${openid}`);
+      return res.status(404).json({
+        code: 404,
+        message: '未找到用户交易信息'
+      });
     }
+    
+    logger.info(`成功获取用户交易信息: ${openid}`);
+    return res.json({
+      code: 200,
+      data: rows[0],
+      message: '获取成功'
+    });
   } catch (error) {
-    logger.error('管理员认证中间件错误:', error);
+    logger.error(`获取用户交易信息失败: ${error.message}`);
+    logger.error(error.stack);
     return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-      code: 500
+      code: 500,
+      message: '服务器错误'
     });
   }
-};
+});
 
-/**
- * @api {post} /api/wx-delivery/add 添加物流信息
- * @apiName AddDelivery
- * @apiGroup WxDelivery
- * @apiDescription 添加物流信息
- * 
- * @apiParam {String} order_id 订单ID
- * @apiParam {String} delivery_id 快递公司ID
- * @apiParam {String} waybill_id 运单号
- */
-router.post('/add', adminAuthMiddleware, async (req, res) => {
+// 提交微信物流信息
+router.post('/submit', auth, async (req, res) => {
   try {
-    const { order_id, delivery_id, waybill_id } = req.body;
+    const { orderSn, transactionId, openid, expressCompany, trackingNo, itemDesc = '订单商品', consignorContact = '138****0000' } = req.body;
     
-    // 参数验证
-    if (!order_id || !delivery_id || !waybill_id) {
+    if (!transactionId || !openid || !expressCompany || !trackingNo) {
       return res.status(400).json({
-        errcode: 400,
-        errmsg: '缺少必要参数'
+        code: 400,
+        message: '缺少必要参数'
       });
     }
     
-    // 获取access_token
-    const accessToken = await wechatService.getAccessToken();
+    logger.info(`提交微信物流信息: 订单号=${orderSn}, 交易号=${transactionId}, 物流公司=${expressCompany}, 运单号=${trackingNo}`);
     
-    // 检查是否为模拟token（以mock_开头）
-    if (accessToken.startsWith('mock_')) {
-      logger.info('检测到模拟access_token，直接返回模拟添加物流信息结果');
+    // 调用微信物流服务
+    const result = await wechatDeliveryService.uploadShippingInfo({
+      transactionId: transactionId,
+      orderSn: orderSn,
+      expressCompany: expressCompany,
+      trackingNo: trackingNo,
+      itemDesc: itemDesc,
+      consignorContact: consignorContact,
+      openid: openid
+    });
+    
+    if (result.success) {
+      logger.info(`微信物流信息提交成功: ${orderSn}`);
       return res.json({
-        errcode: 0,
-        errmsg: 'ok (模拟)'
+        code: 200,
+        data: result.data,
+        message: '物流信息提交成功'
+      });
+    } else {
+      logger.error(`微信物流信息提交失败: ${result.message}`);
+      return res.status(400).json({
+        code: 400,
+        message: result.message
       });
     }
-    
-    // 构建物流信息数据
-    const deliveryData = {
-      order_id,
-      delivery_id,
-      waybill_id
-    };
-    
-    // 调用微信添加物流信息API
-    const result = await wechatService.addDeliveryInfo(accessToken, deliveryData);
-    
-    res.json(result);
   } catch (error) {
-    logger.error('添加物流信息失败:', error);
-    res.status(500).json({
-      errcode: -1,
-      errmsg: `添加物流信息失败: ${error.message}`
+    logger.error(`提交微信物流信息失败: ${error.message}`);
+    logger.error(error.stack);
+    return res.status(500).json({
+      code: 500,
+      message: '服务器错误'
     });
   }
 });

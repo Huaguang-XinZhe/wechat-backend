@@ -3,11 +3,52 @@ const router = express.Router();
 
 const wechatService = require("../services/wechatService");
 const logger = require("../utils/logger");
-const { orders } = require("../models/orderModels");
+const { orders, wxPaymentTransactions } = require("../models/orderModels");
 const axios = require("axios"); // 添加axios用于HTTP请求
+const mysql = require('mysql2/promise'); // 添加mysql2用于数据库操作
+const dbConfig = require('../config/database');
 
 // 老后端URL配置 - 从环境变量获取
 const OLD_BACKEND_URL = process.env.LEGACY_BACKEND_URL || "https://boyangchuanggu.com";
+
+// 保存微信支付交易信息到数据库
+async function saveWxPaymentTransaction(transactionId, openid) {
+  try {
+    logger.info(`保存微信支付交易信息: 交易号=${transactionId}, openid=${openid}`);
+    
+    // 创建数据库连接
+    const connection = await mysql.createConnection(dbConfig);
+    
+    // 检查是否已存在记录
+    const [existingRows] = await connection.execute(
+      'SELECT transaction_id FROM wx_payment_transaction WHERE transaction_id = ?',
+      [transactionId]
+    );
+    
+    if (existingRows.length > 0) {
+      logger.info(`交易记录已存在，更新: ${transactionId}`);
+      await connection.execute(
+        'UPDATE wx_payment_transaction SET openid = ? WHERE transaction_id = ?',
+        [openid, transactionId]
+      );
+    } else {
+      logger.info(`创建新的交易记录: ${transactionId}`);
+      await connection.execute(
+        'INSERT INTO wx_payment_transaction (transaction_id, openid) VALUES (?, ?)',
+        [transactionId, openid]
+      );
+    }
+    
+    // 关闭连接
+    await connection.end();
+    logger.info(`微信支付交易信息保存成功: ${transactionId}`);
+    return true;
+  } catch (error) {
+    logger.error(`保存微信支付交易信息失败: ${error.message}`);
+    logger.error(error.stack);
+    return false;
+  }
+}
 
 // 微信支付回调通知（V3 API - JSON格式）
 router.post("/notify", (req, res) => {
@@ -63,8 +104,12 @@ router.post("/notify", (req, res) => {
               const out_trade_no = decryptedData.out_trade_no;
               const transaction_id = decryptedData.transaction_id;
               const total_fee = decryptedData.amount.total / 100; // 单位为分，转换为元
+              const openid = decryptedData.payer?.openid || '';
               
-              logger.info(`支付成功: 订单号=${out_trade_no}, 交易号=${transaction_id}, 金额=${total_fee}元`);
+              logger.info(`支付成功: 订单号=${out_trade_no}, 交易号=${transaction_id}, 金额=${total_fee}元, openid=${openid}`);
+              
+              // 保存微信支付交易信息
+              await saveWxPaymentTransaction(transaction_id, openid);
               
               // 查找对应的订单
               const order = orders.get(out_trade_no);
@@ -90,7 +135,16 @@ router.post("/notify", (req, res) => {
                 order.status = "paid";
                 order.paidAt = new Date();
                 order.transactionId = transaction_id;
+                order.openid = openid;
                 orders.set(out_trade_no, order);
+                
+                // 保存到内存中的交易记录
+                wxPaymentTransactions.set(out_trade_no, {
+                  orderSn: out_trade_no,
+                  transactionId: transaction_id,
+                  openid: openid,
+                  payTime: new Date()
+                });
                 
                 logger.info(`订单支付成功: ${out_trade_no}, 外部订单: ${order.externalOrderId || '无'}`);
                 
@@ -112,7 +166,16 @@ router.post("/notify", (req, res) => {
                   unpaidOrder.status = "paid";
                   unpaidOrder.paidAt = new Date();
                   unpaidOrder.transactionId = transaction_id;
+                  unpaidOrder.openid = openid;
                   orders.set(unpaidOrder.orderNo, unpaidOrder);
+                  
+                  // 保存到内存中的交易记录
+                  wxPaymentTransactions.set(unpaidOrder.orderNo, {
+                    orderSn: unpaidOrder.orderNo,
+                    transactionId: transaction_id,
+                    openid: openid,
+                    payTime: new Date()
+                  });
                   
                   logger.info(`更新未支付订单: ${unpaidOrder.orderNo}, 外部订单: ${unpaidOrder.externalOrderId || '无'}`);
                   

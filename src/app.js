@@ -12,11 +12,13 @@ const errorHandler = require("./middleware/errorHandler");
 const { testLegacyConnection } = require("./config/legacyDatabase"); // 引入老系统数据库连接测试
 const authRoutes = require("./routes/auth");
 const paymentRoutes = require("./routes/payment"); // 使用完整版支付路由
+const paymentNotifyRoutes = require("./routes/paymentNotify"); // 支付通知路由
 const userRoutes = require("./routes/user");
 const debugRoutes = require("./routes/debug");
 const authLegacyRoutes = require("./routes/auth-legacy"); // 添加老系统兼容路由
 const testRoutes = require("./routes/test"); // 添加测试路由
 const wxDeliveryRoutes = require("./routes/wxDelivery"); // 添加微信物流相关路由
+const ordersRoutes = require("./routes/orders"); // 添加订单相关路由
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -312,12 +314,15 @@ app.get("/api", (req, res) => {
 // API 路由
 app.use("/api/auth", authRoutes);
 app.use("/api/payment", paymentRoutes); // 使用完整版支付路由
+app.use("/api/payment", paymentNotifyRoutes); // 注册支付通知路由
 app.use("/api/user", userRoutes);
 app.use("/api/debug", debugRoutes);
 // 添加老系统兼容路由
 app.use("/api/legacy/auth", authLegacyRoutes);
 // 添加测试路由
 app.use("/api/test", testRoutes);
+// 添加订单相关路由
+app.use("/api/orders", ordersRoutes);
 // 添加微信物流相关路由
 app.use("/api/wx-delivery", wxDeliveryRoutes);
 
