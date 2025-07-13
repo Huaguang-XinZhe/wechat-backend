@@ -114,6 +114,14 @@ class WechatService {
   async addDeliveryInfo(accessToken, deliveryData) {
     return this.deliveryService.addDeliveryInfo(accessToken, deliveryData);
   }
+
+  /**
+   * 获取模拟物流公司数据
+   * @returns {Object} 模拟物流公司数据
+   */
+  getMockDeliveryCompanies() {
+    return this.deliveryService.getMockDeliveryCompanies();
+  }
 }
 
 // 导出单例

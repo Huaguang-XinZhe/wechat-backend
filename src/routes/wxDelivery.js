@@ -66,6 +66,13 @@ router.get('/companies', adminAuthMiddleware, async (req, res) => {
     // 获取access_token
     const accessToken = await wechatService.getAccessToken();
     
+    // 检查是否为模拟token（以mock_开头）
+    if (accessToken.startsWith('mock_')) {
+      logger.info('检测到模拟access_token，直接返回模拟物流公司数据');
+      const mockData = await wechatService.getMockDeliveryCompanies();
+      return res.json(mockData);
+    }
+    
     // 调用微信获取物流公司列表API
     const result = await wechatService.getDeliveryCompanies(accessToken);
     
@@ -103,6 +110,15 @@ router.post('/add', adminAuthMiddleware, async (req, res) => {
     
     // 获取access_token
     const accessToken = await wechatService.getAccessToken();
+    
+    // 检查是否为模拟token（以mock_开头）
+    if (accessToken.startsWith('mock_')) {
+      logger.info('检测到模拟access_token，直接返回模拟添加物流信息结果');
+      return res.json({
+        errcode: 0,
+        errmsg: 'ok (模拟)'
+      });
+    }
     
     // 调用微信添加物流信息API
     const result = await wechatService.addDeliveryInfo(accessToken, {

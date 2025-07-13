@@ -15,8 +15,8 @@ class WechatDeliveryService extends WechatBaseService {
       }
       
       // 检查access_token
-      if (!accessToken) {
-        logger.error('获取物流公司列表失败: access_token为空');
+      if (!accessToken || accessToken.startsWith('mock_')) {
+        logger.warn('使用的是模拟access_token或token为空，直接返回模拟物流公司数据');
         return this.getMockDeliveryCompanies();
       }
       
@@ -28,7 +28,7 @@ class WechatDeliveryService extends WechatBaseService {
       // 调用微信API
       logger.info(`开始调用微信API: ${url}`);
       const response = await axios.post(url, {}, {
-        timeout: 10000 // 设置10秒超时
+        timeout: 20000 // 设置20秒超时
       });
       
       logger.info(`微信API响应: ${JSON.stringify(response.data)}`);
@@ -42,10 +42,15 @@ class WechatDeliveryService extends WechatBaseService {
       logger.info(`成功获取物流公司列表，共${data.count}家`);
       return data;
     } catch (error) {
-      logger.error('获取物流公司列表失败:', error);
-      if (error.response) {
+      logger.error(`获取物流公司列表失败: ${error.message || error}`);
+      
+      if (error.code === 'ECONNABORTED') {
+        logger.error('获取物流公司列表请求超时');
+      } else if (error.response) {
         logger.error(`HTTP状态码: ${error.response.status}`);
         logger.error(`响应数据: ${JSON.stringify(error.response.data)}`);
+      } else if (error.request) {
+        logger.error('未收到响应，可能是网络问题');
       }
       
       // 返回模拟数据
@@ -113,8 +118,8 @@ class WechatDeliveryService extends WechatBaseService {
       }
       
       // 检查access_token
-      if (!accessToken) {
-        logger.error('添加物流信息失败: access_token为空');
+      if (!accessToken || accessToken.startsWith('mock_')) {
+        logger.warn('使用的是模拟access_token或token为空，直接返回模拟添加物流信息结果');
         return {
           errcode: 0,
           errmsg: 'ok (模拟)'
@@ -138,7 +143,7 @@ class WechatDeliveryService extends WechatBaseService {
       logger.info(`请求数据: ${JSON.stringify(requestData)}`);
       
       const response = await axios.post(url, requestData, {
-        timeout: 10000 // 设置10秒超时
+        timeout: 20000 // 设置20秒超时
       });
       
       logger.info(`微信API响应: ${JSON.stringify(response.data)}`);
@@ -155,10 +160,15 @@ class WechatDeliveryService extends WechatBaseService {
       logger.info('添加物流信息成功');
       return data;
     } catch (error) {
-      logger.error('添加物流信息失败:', error);
-      if (error.response) {
+      logger.error(`添加物流信息失败: ${error.message || error}`);
+      
+      if (error.code === 'ECONNABORTED') {
+        logger.error('添加物流信息请求超时');
+      } else if (error.response) {
         logger.error(`HTTP状态码: ${error.response.status}`);
         logger.error(`响应数据: ${JSON.stringify(error.response.data)}`);
+      } else if (error.request) {
+        logger.error('未收到响应，可能是网络问题');
       }
       
       // 返回模拟数据

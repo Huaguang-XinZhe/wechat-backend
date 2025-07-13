@@ -86,7 +86,7 @@ class WechatBaseService {
       
       const response = await axios.get(url, { 
         params,
-        timeout: 10000 // 设置10秒超时
+        timeout: 20000 // 设置20秒超时
       });
       
       logger.info(`微信API响应: ${JSON.stringify(response.data)}`);
@@ -106,10 +106,15 @@ class WechatBaseService {
       logger.info(`成功获取access_token: ${data.access_token.substring(0, 10)}...`);
       return data.access_token;
     } catch (error) {
-      logger.error("获取access_token失败:", error);
-      if (error.response) {
+      logger.error(`获取access_token失败: ${error.message || error}`);
+      
+      if (error.code === 'ECONNABORTED') {
+        logger.error('获取access_token请求超时');
+      } else if (error.response) {
         logger.error(`HTTP状态码: ${error.response.status}`);
         logger.error(`响应数据: ${JSON.stringify(error.response.data)}`);
+      } else if (error.request) {
+        logger.error('未收到响应，可能是网络问题');
       }
       
       // 返回模拟数据
