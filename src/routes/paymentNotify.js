@@ -127,25 +127,25 @@ router.post("/notify", (req, res) => {
             
             // 检查支付状态
             if (decryptedData.trade_state === "SUCCESS") {
-              const out_trade_no = decryptedData.out_trade_no;
+              const order_sn = decryptedData.out_trade_no;
               const transaction_id = decryptedData.transaction_id;
               const total_fee = decryptedData.amount.total / 100; // 单位为分，转换为元
               const openid = decryptedData.payer?.openid || '';
               
-              logger.info(`支付成功: 订单号=${out_trade_no}, 交易号=${transaction_id}, 金额=${total_fee}元, openid=${openid}`);
+              logger.info(`支付成功: 订单号=${order_sn}, 交易号=${transaction_id}, 金额=${total_fee}元, openid=${openid}`);
               
               // 保存微信支付交易信息
-              await saveWxPaymentTransaction(out_trade_no, transaction_id);
+              await saveWxPaymentTransaction(order_sn, transaction_id);
               
               // 查找对应的订单
-              const order = orders.get(out_trade_no);
+              const order = orders.get(order_sn);
               
               if (order) {
                 logger.info(`找到订单: ${JSON.stringify(order)}`);
                 
                 // 验证金额是否一致
                 if (Math.abs(order.amount - total_fee) > 0.01) {
-                  logger.error(`订单金额不匹配: ${out_trade_no}, 预期: ${order.amount}, 实际: ${total_fee}`);
+                  logger.error(`订单金额不匹配: ${order_sn}, 预期: ${order.amount}, 实际: ${total_fee}`);
                   return res.json({ code: "FAIL", message: "金额不匹配" });
                 }
                 
@@ -153,7 +153,7 @@ router.post("/notify", (req, res) => {
                 
                 // 检查订单是否已经支付，避免重复处理
                 if (order.status === "paid") {
-                  logger.info(`订单已经是支付状态，跳过处理: ${out_trade_no}, 交易号: ${order.transactionId || '无'}`);
+                  logger.info(`订单已经是支付状态，跳过处理: ${order_sn}, 交易号: ${order.transactionId || '无'}`);
                   return res.json({ code: "SUCCESS", message: "OK" });
                 }
                 
@@ -162,24 +162,24 @@ router.post("/notify", (req, res) => {
                 order.paidAt = new Date();
                 order.transactionId = transaction_id;
                 order.openid = openid;
-                orders.set(out_trade_no, order);
+                orders.set(order_sn, order);
                 
                 // 保存到内存中的交易记录
-                wxPaymentTransactions.set(out_trade_no, {
-                  orderSn: out_trade_no,
+                wxPaymentTransactions.set(order_sn, {
+                  orderSn: order_sn,
                   transactionId: transaction_id,
                   openid: openid,
                   payTime: new Date()
                 });
                 
-                logger.info(`订单支付成功: ${out_trade_no}, 外部订单: ${order.externalOrderId || '无'}`);
+                logger.info(`订单支付成功: ${order_sn}, 外部订单: ${order.externalOrderId || '无'}`);
                 
                 // 如果是外部订单，通知老后端更新订单状态
                 if (order.externalOrderId) {
                   await notifyOldBackend(order.externalOrderId, order.userId);
                 }
               } else {
-                logger.warn(`未找到订单: ${out_trade_no}`);
+                logger.warn(`未找到订单: ${order_sn}`);
                 
                 // 如果找不到订单，尝试查找所有未支付订单
                 const orderList = Array.from(orders.values());
