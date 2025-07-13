@@ -777,6 +777,107 @@ class WechatService {
       return false;
     }
   }
+
+  // 获取微信支持的物流公司列表
+  async getDeliveryCompanies(accessToken) {
+    try {
+      logger.info('获取微信支持的物流公司列表');
+      
+      // 微信获取物流公司列表API
+      const url = `https://api.weixin.qq.com/cgi-bin/express/delivery/open_msg/get_delivery_list?access_token=${accessToken}`;
+      
+      // 调用微信API
+      const response = await axios.post(url, {});
+      const data = response.data;
+      
+      if (data.errcode && data.errcode !== 0) {
+        throw new Error(`微信接口错误: ${data.errcode} - ${data.errmsg}`);
+      }
+      
+      logger.info(`成功获取物流公司列表，共${data.count}家`);
+      return data;
+    } catch (error) {
+      logger.error('获取物流公司列表失败:', error);
+      
+      // 如果是开发环境，返回模拟数据
+      if (process.env.NODE_ENV === 'development') {
+        logger.warn('开发环境返回模拟物流公司数据');
+        return {
+          errcode: 0,
+          delivery_list: [
+            {
+              delivery_id: 'SF',
+              delivery_name: '顺丰速运'
+            },
+            {
+              delivery_id: 'ZTO',
+              delivery_name: '中通快递'
+            },
+            {
+              delivery_id: 'YTO',
+              delivery_name: '圆通速递'
+            },
+            {
+              delivery_id: 'STO',
+              delivery_name: '申通快递'
+            },
+            {
+              delivery_id: 'YD',
+              delivery_name: '韵达速递'
+            }
+          ],
+          count: 5
+        };
+      }
+      
+      throw error;
+    }
+  }
+  
+  // 添加物流信息
+  async addDeliveryInfo(accessToken, deliveryData) {
+    try {
+      const { order_id, delivery_id, waybill_id } = deliveryData;
+      
+      logger.info(`添加物流信息: 订单ID=${order_id}, 物流公司=${delivery_id}, 运单号=${waybill_id}`);
+      
+      // 微信添加物流信息API
+      const url = `https://api.weixin.qq.com/cgi-bin/express/delivery/open_msg/add_order?access_token=${accessToken}`;
+      
+      // 构建请求数据
+      const requestData = {
+        order_id,
+        delivery_id,
+        waybill_id,
+        delivery_status: 0, // 0: 待揽收, 1: 已揽收, 2: 运输中, 3: 派送中, 4: 已签收, 5: 异常
+        upload_time: Math.floor(Date.now() / 1000)
+      };
+      
+      // 调用微信API
+      const response = await axios.post(url, requestData);
+      const data = response.data;
+      
+      if (data.errcode && data.errcode !== 0) {
+        throw new Error(`微信接口错误: ${data.errcode} - ${data.errmsg}`);
+      }
+      
+      logger.info('添加物流信息成功');
+      return data;
+    } catch (error) {
+      logger.error('添加物流信息失败:', error);
+      
+      // 如果是开发环境，返回模拟数据
+      if (process.env.NODE_ENV === 'development') {
+        logger.warn('开发环境返回模拟添加物流信息结果');
+        return {
+          errcode: 0,
+          errmsg: 'ok'
+        };
+      }
+      
+      throw error;
+    }
+  }
 }
 
 module.exports = new WechatService();
