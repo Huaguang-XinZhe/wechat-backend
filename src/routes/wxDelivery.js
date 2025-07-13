@@ -2,9 +2,7 @@ const express = require('express');
 const router = express.Router();
 const wechatService = require('../services/wechatService');
 const logger = require('../utils/logger');
-const auth = require('../middleware/auth');
-
-// 不再需要实例化wechatService，因为它已经是一个实例了
+const { authMiddleware } = require('../middleware/auth');
 
 /**
  * @api {get} /api/wx-delivery/companies 获取物流公司列表
@@ -16,7 +14,7 @@ const auth = require('../middleware/auth');
  * @apiSuccess {Array} delivery_list 物流公司列表
  * @apiSuccess {Number} count 物流公司数量
  */
-router.get('/companies', auth, async (req, res) => {
+router.get('/companies', authMiddleware, async (req, res) => {
   try {
     // 获取access_token
     const accessToken = await wechatService.getAccessToken();
@@ -44,7 +42,7 @@ router.get('/companies', auth, async (req, res) => {
  * @apiParam {String} delivery_id 快递公司ID
  * @apiParam {String} waybill_id 运单号
  */
-router.post('/add', auth, async (req, res) => {
+router.post('/add', authMiddleware, async (req, res) => {
   try {
     const { order_id, delivery_id, waybill_id } = req.body;
     
