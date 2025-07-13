@@ -4,10 +4,10 @@ const logger = require('../utils/logger');
 const mysql = require('mysql2/promise');
 const dbConfig = require('../config/database');
 const wechatDeliveryService = require('../services/wechatDeliveryService');
-const auth = require('../middleware/auth');
+const { authMiddleware } = require('../middleware/auth');
 
 // 根据用户账号获取微信支付交易信息
-router.get('/transaction/:encodedOpenid', auth, async (req, res) => {
+router.get('/transaction/:encodedOpenid', authMiddleware, async (req, res) => {
   try {
     const { encodedOpenid } = req.params;
     logger.info(`根据用户账号获取微信支付交易信息: ${encodedOpenid}`);
@@ -61,7 +61,7 @@ router.get('/transaction/:encodedOpenid', auth, async (req, res) => {
 });
 
 // 提交微信物流信息
-router.post('/submit', auth, async (req, res) => {
+router.post('/submit', authMiddleware, async (req, res) => {
   try {
     const { orderSn, transactionId, openid, expressCompany, trackingNo, itemDesc = '订单商品', consignorContact = '138****0000' } = req.body;
     
