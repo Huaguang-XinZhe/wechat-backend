@@ -74,7 +74,8 @@ class WechatBaseService {
         return this.accessTokenCache.token;
       }
 
-      const url = `${this.baseURL}/cgi-bin/token`;
+      // 直接构建完整URL
+      const url = 'https://api.weixin.qq.com/cgi-bin/token';
       const params = {
         grant_type: "client_credential",
         appid: this.appId,
@@ -82,13 +83,17 @@ class WechatBaseService {
       };
 
       logger.info(`开始获取access_token: ${url}`);
-      logger.info(`请求参数: appid=${this.appId}, secret=${this.appSecret.substring(0, 3)}***`);
+      logger.info(`请求参数: ${JSON.stringify(params)}`);
       
+      // 使用更简洁的请求方式
+      const startTime = Date.now();
       const response = await axios.get(url, { 
         params,
-        timeout: 20000 // 设置20秒超时
+        timeout: 10000 // 设置10秒超时
       });
+      const endTime = Date.now();
       
+      logger.info(`请求耗时: ${endTime - startTime}ms`);
       logger.info(`微信API响应: ${JSON.stringify(response.data)}`);
       const data = response.data;
 
@@ -115,6 +120,7 @@ class WechatBaseService {
         logger.error(`响应数据: ${JSON.stringify(error.response.data)}`);
       } else if (error.request) {
         logger.error('未收到响应，可能是网络问题');
+        logger.error(`请求详情: ${JSON.stringify(error.request._currentUrl || error.request)}`);
       }
       
       // 返回模拟数据
