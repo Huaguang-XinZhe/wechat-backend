@@ -1,6 +1,5 @@
 const axios = require('axios');
 const logger = require('../utils/logger');
-const wechatService = require('./wechatService');
 
 /**
  * 上传物流信息到微信
@@ -11,7 +10,6 @@ async function uploadShippingInfo(params) {
   try {
     const {
       transactionId,
-      orderSn,
       expressCompany,
       trackingNo,
       itemDesc = '订单商品',
@@ -22,6 +20,7 @@ async function uploadShippingInfo(params) {
     logger.info(`添加物流信息: 交易号=${transactionId}, 物流公司=${expressCompany}, 运单号=${trackingNo}`);
 
     // 获取微信access_token
+    const wechatService = require('./wechatService');
     const accessToken = await wechatService.getAccessToken();
     logger.info(`成功获取access_token: ${accessToken.substring(0, 10)}...`);
 
@@ -44,7 +43,7 @@ async function uploadShippingInfo(params) {
       shipping_list: [
         {
           tracking_no: trackingNo, // 运单号
-          express_company: expressCompany, // 物流公司
+          express_company: expressCompany, // 物流公司代码，直接使用前端传来的代码
           item_desc: itemDesc, // 商品描述
           contact: {
             consignor_contact: consignorContact // 发件人联系方式

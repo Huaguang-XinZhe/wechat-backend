@@ -239,7 +239,29 @@ router.post('/submit', authMiddleware, async (req, res) => {
         });
       }
       
-      logger.info(`物流信息提交成功: ${orderSn}`);
+      // 导入微信物流服务
+      const wechatDeliveryService = require('../services/wechatDeliveryService');
+      
+      // 调用微信API上传物流信息
+      const uploadResult = await wechatDeliveryService.uploadShippingInfo({
+        transactionId,
+        orderSn,
+        expressCompany,
+        trackingNo,
+        itemDesc,
+        consignorContact,
+        openid
+      });
+      
+      if (!uploadResult.success) {
+        logger.warn(`微信物流信息上传失败: ${uploadResult.message}`);
+        return res.status(500).json({
+          code: 500,
+          message: `物流信息已更新，但微信物流上传失败: ${uploadResult.message}`
+        });
+      }
+      
+      logger.info(`物流信息提交成功并已上传到微信: ${orderSn}`);
       return res.json({
         code: 200,
         data: {
@@ -248,9 +270,10 @@ router.post('/submit', authMiddleware, async (req, res) => {
           express_company: expressCompany,
           tracking_no: trackingNo,
           status: 'CREATED',
-          create_time: new Date().toISOString()
+          create_time: new Date().toISOString(),
+          wx_upload_result: uploadResult.data
         },
-        message: '物流信息提交成功'
+        message: '物流信息提交成功并已上传到微信'
       });
     } catch (dbError) {
       logger.error(`数据库操作失败: ${dbError.message}`);
