@@ -4,13 +4,13 @@ const logger = require('../utils/logger');
 const mysql = require('mysql2/promise');
 const { authMiddleware } = require('../middleware/auth');
 
-// 数据库连接配置
+// 使用老系统数据库配置
 const dbConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 3306,
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'wechat_miniprogram',
+  host: process.env.LEGACY_DB_HOST || '1.117.227.184',
+  port: process.env.LEGACY_DB_PORT || 3306,
+  user: process.env.LEGACY_DB_USER || 'root',
+  password: process.env.LEGACY_DB_PASSWORD || '59sgYlQuiXoE',
+  database: process.env.LEGACY_DB_NAME || 'mall',
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0
@@ -25,9 +25,9 @@ router.get('/transaction/:openid', authMiddleware, async (req, res) => {
     // 创建数据库连接
     const connection = await mysql.createConnection(dbConfig);
     
-    // 查询交易信息
+    // 查询wx_payment_transaction表获取交易信息
     const [rows] = await connection.execute(
-      'SELECT * FROM wx_payment_transaction WHERE openid = ? ORDER BY transaction_id DESC LIMIT 1',
+      'SELECT * FROM wx_payment_transaction WHERE openid = ? ORDER BY id DESC LIMIT 1',
       [openid]
     );
     
@@ -74,21 +74,27 @@ router.post('/submit', authMiddleware, async (req, res) => {
     // 创建数据库连接
     const connection = await mysql.createConnection(dbConfig);
     
-    // 记录物流信息到数据库
+    // 更新老系统订单的物流信息
     const [result] = await connection.execute(
-      'INSERT INTO wx_delivery_info (order_sn, transaction_id, openid, express_company, tracking_no, item_desc, consignor_contact, status, create_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())',
-      [orderSn, transactionId, openid, expressCompany, trackingNo, itemDesc, consignorContact, 'CREATED']
+      'UPDATE oms_order SET delivery_company = ?, delivery_sn = ?, delivery_time = NOW(), status = 2 WHERE order_sn = ?',
+      [expressCompany, trackingNo, orderSn]
     );
     
     await connection.end();
     
-    const deliveryId = result.insertId;
+    if (result.affectedRows === 0) {
+      logger.warn(`未找到订单: ${orderSn}`);
+      return res.status(404).json({
+        code: 404,
+        message: '未找到订单'
+      });
+    }
     
-    logger.info(`物流信息提交成功: ${orderSn}, ID=${deliveryId}`);
+    logger.info(`物流信息提交成功: ${orderSn}`);
     return res.json({
       code: 200,
       data: {
-        delivery_id: deliveryId,
+        delivery_id: `WX_${Date.now()}`,
         out_order_no: orderSn,
         express_company: expressCompany,
         tracking_no: trackingNo,
