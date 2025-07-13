@@ -52,41 +52,6 @@ const adminAuthMiddleware = (req, res, next) => {
 };
 
 /**
- * @api {get} /api/wx-delivery/companies 获取物流公司列表
- * @apiName GetDeliveryCompanies
- * @apiGroup WxDelivery
- * @apiDescription 获取微信支持的物流公司列表
- *
- * @apiSuccess {Number} errcode 错误码，0表示成功
- * @apiSuccess {Array} delivery_list 物流公司列表
- * @apiSuccess {Number} count 物流公司数量
- */
-router.get('/companies', adminAuthMiddleware, async (req, res) => {
-  try {
-    // 获取access_token
-    const accessToken = await wechatService.getAccessToken();
-    
-    // 检查是否为模拟token（以mock_开头）
-    if (accessToken.startsWith('mock_')) {
-      logger.info('检测到模拟access_token，直接返回模拟物流公司数据');
-      const mockData = await wechatService.getMockDeliveryCompanies();
-      return res.json(mockData);
-    }
-    
-    // 调用微信获取物流公司列表API
-    const result = await wechatService.getDeliveryCompanies(accessToken);
-    
-    res.json(result);
-  } catch (error) {
-    logger.error('获取物流公司列表失败:', error);
-    res.status(500).json({
-      errcode: -1,
-      errmsg: `获取物流公司列表失败: ${error.message}`
-    });
-  }
-});
-
-/**
  * @api {post} /api/wx-delivery/add 添加物流信息
  * @apiName AddDelivery
  * @apiGroup WxDelivery

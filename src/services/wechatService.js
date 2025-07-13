@@ -97,15 +97,6 @@ class WechatService {
   // ===== 物流服务 =====
   
   /**
-   * 获取微信支持的物流公司列表
-   * @param {string} accessToken 接口调用凭证
-   * @returns {Promise<Object>} 物流公司列表
-   */
-  async getDeliveryCompanies(accessToken) {
-    return this.deliveryService.getDeliveryCompanies(accessToken);
-  }
-
-  /**
    * 添加物流信息
    * @param {string} accessToken 接口调用凭证
    * @param {Object} deliveryData 物流数据
@@ -113,14 +104,6 @@ class WechatService {
    */
   async addDeliveryInfo(accessToken, deliveryData) {
     return this.deliveryService.addDeliveryInfo(accessToken, deliveryData);
-  }
-
-  /**
-   * 获取模拟物流公司数据
-   * @returns {Object} 模拟物流公司数据
-   */
-  getMockDeliveryCompanies() {
-    return this.deliveryService.getMockDeliveryCompanies();
   }
 }
 
