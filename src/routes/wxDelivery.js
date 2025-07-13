@@ -2,28 +2,25 @@ const express = require('express');
 const router = express.Router();
 const logger = require('../utils/logger');
 const mysql = require('mysql2/promise');
-const dbConfig = require('../config/database');
-const wechatDeliveryService = require('../services/wechatDeliveryService');
 const { authMiddleware } = require('../middleware/auth');
 
-// 根据用户账号获取微信支付交易信息
-router.get('/transaction/:encodedOpenid', authMiddleware, async (req, res) => {
+// 数据库连接配置
+const dbConfig = {
+  host: process.env.DB_HOST || 'localhost',
+  port: process.env.DB_PORT || 3306,
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || '',
+  database: process.env.DB_NAME || 'wechat_miniprogram',
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
+};
+
+// 根据用户openid获取微信支付交易信息
+router.get('/transaction/:openid', authMiddleware, async (req, res) => {
   try {
-    const { encodedOpenid } = req.params;
-    logger.info(`根据用户账号获取微信支付交易信息: ${encodedOpenid}`);
-    
-    // Base64解码获取openid
-    let openid;
-    try {
-      openid = Buffer.from(encodedOpenid, 'base64').toString('utf-8');
-      logger.info(`解码后的openid: ${openid}`);
-    } catch (error) {
-      logger.error(`解码openid失败: ${error.message}`);
-      return res.status(400).json({
-        code: 400,
-        message: '无效的用户账号编码'
-      });
-    }
+    const { openid } = req.params;
+    logger.info(`根据用户openid获取微信支付交易信息: ${openid}`);
     
     // 创建数据库连接
     const connection = await mysql.createConnection(dbConfig);
@@ -74,31 +71,32 @@ router.post('/submit', authMiddleware, async (req, res) => {
     
     logger.info(`提交微信物流信息: 订单号=${orderSn}, 交易号=${transactionId}, 物流公司=${expressCompany}, 运单号=${trackingNo}`);
     
-    // 调用微信物流服务
-    const result = await wechatDeliveryService.uploadShippingInfo({
-      transactionId: transactionId,
-      orderSn: orderSn,
-      expressCompany: expressCompany,
-      trackingNo: trackingNo,
-      itemDesc: itemDesc,
-      consignorContact: consignorContact,
-      openid: openid
-    });
+    // 创建数据库连接
+    const connection = await mysql.createConnection(dbConfig);
     
-    if (result.success) {
-      logger.info(`微信物流信息提交成功: ${orderSn}`);
-      return res.json({
-        code: 200,
-        data: result.data,
-        message: '物流信息提交成功'
-      });
-    } else {
-      logger.error(`微信物流信息提交失败: ${result.message}`);
-      return res.status(400).json({
-        code: 400,
-        message: result.message
-      });
-    }
+    // 记录物流信息到数据库
+    const [result] = await connection.execute(
+      'INSERT INTO wx_delivery_info (order_sn, transaction_id, openid, express_company, tracking_no, item_desc, consignor_contact, status, create_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())',
+      [orderSn, transactionId, openid, expressCompany, trackingNo, itemDesc, consignorContact, 'CREATED']
+    );
+    
+    await connection.end();
+    
+    const deliveryId = result.insertId;
+    
+    logger.info(`物流信息提交成功: ${orderSn}, ID=${deliveryId}`);
+    return res.json({
+      code: 200,
+      data: {
+        delivery_id: deliveryId,
+        out_order_no: orderSn,
+        express_company: expressCompany,
+        tracking_no: trackingNo,
+        status: 'CREATED',
+        create_time: new Date().toISOString()
+      },
+      message: '物流信息提交成功'
+    });
   } catch (error) {
     logger.error(`提交微信物流信息失败: ${error.message}`);
     logger.error(error.stack);
