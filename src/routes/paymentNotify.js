@@ -127,94 +127,96 @@ router.post("/notify", (req, res) => {
             
             // 检查支付状态
             if (decryptedData.trade_state === "SUCCESS") {
-              const order_sn = decryptedData.out_trade_no;
+              const out_trade_no = decryptedData.out_trade_no;
               const transaction_id = decryptedData.transaction_id;
               const total_fee = decryptedData.amount.total / 100; // 单位为分，转换为元
               const openid = decryptedData.payer?.openid || '';
               
-              logger.info(`支付成功: 订单号=${order_sn}, 交易号=${transaction_id}, 金额=${total_fee}元, openid=${openid}`);
+              logger.info(`支付成功: 微信商户订单号=${out_trade_no}, 交易号=${transaction_id}, 金额=${total_fee}元, openid=${openid}`);
               
-              // 保存微信支付交易信息
-              await saveWxPaymentTransaction(order_sn, transaction_id);
-              
-              // 查找对应的订单
-              const order = orders.get(order_sn);
-              
-              if (order) {
-                logger.info(`找到订单: ${JSON.stringify(order)}`);
+              try {
+                // 将openid进行base64编码，用于查询oms_order表
+                const encodedOpenid = Buffer.from(openid).toString('base64');
+                logger.info(`openid的base64编码值: ${encodedOpenid}`);
                 
-                // 验证金额是否一致
-                if (Math.abs(order.amount - total_fee) > 0.01) {
-                  logger.error(`订单金额不匹配: ${order_sn}, 预期: ${order.amount}, 实际: ${total_fee}`);
-                  return res.json({ code: "FAIL", message: "金额不匹配" });
+                // 从oms_order表中查询对应的订单编号(order_sn)
+                const orderRows = await legacySequelize.query(
+                  'SELECT order_sn FROM oms_order WHERE member_username = ? AND status = 0 ORDER BY create_time DESC LIMIT 1',
+                  {
+                    replacements: [encodedOpenid],
+                    type: legacySequelize.QueryTypes.SELECT
+                  }
+                );
+                
+                if (orderRows.length === 0) {
+                  logger.warn(`未找到对应的订单: openid=${openid}, encodedOpenid=${encodedOpenid}`);
+                  return res.json({ code: "SUCCESS", message: "OK" }); // 仍然返回成功给微信，但记录警告
                 }
                 
-                logger.info(`订单金额验证通过: 预期=${order.amount}, 实际=${total_fee}`);
+                const order_sn = orderRows[0].order_sn;
+                logger.info(`找到对应的订单编号: ${order_sn}`);
                 
-                // 检查订单是否已经支付，避免重复处理
-                if (order.status === "paid") {
-                  logger.info(`订单已经是支付状态，跳过处理: ${order_sn}, 交易号: ${order.transactionId || '无'}`);
-                  return res.json({ code: "SUCCESS", message: "OK" });
-                }
+                // 保存微信支付交易信息
+                await saveWxPaymentTransaction(order_sn, transaction_id);
                 
-                // 更新内部订单状态
-                order.status = "paid";
-                order.paidAt = new Date();
-                order.transactionId = transaction_id;
-                order.openid = openid;
-                orders.set(order_sn, order);
+                // 更新订单状态为已支付
+                await legacySequelize.query(
+                  'UPDATE oms_order SET status = 1, payment_time = NOW(), pay_type = 2 WHERE order_sn = ? AND status = 0',
+                  {
+                    replacements: [order_sn],
+                    type: legacySequelize.QueryTypes.UPDATE
+                  }
+                );
+                logger.info(`订单状态已更新为已支付: ${order_sn}`);
                 
-                // 保存到内存中的交易记录
-                wxPaymentTransactions.set(order_sn, {
-                  orderSn: order_sn,
-                  transactionId: transaction_id,
-                  openid: openid,
-                  payTime: new Date()
-                });
+                // 查找对应的订单
+                const order = orders.get(order_sn);
                 
-                logger.info(`订单支付成功: ${order_sn}, 外部订单: ${order.externalOrderId || '无'}`);
-                
-                // 如果是外部订单，通知老后端更新订单状态
-                if (order.externalOrderId) {
-                  await notifyOldBackend(order.externalOrderId, order.userId);
-                }
-              } else {
-                logger.warn(`未找到订单: ${order_sn}`);
-                
-                // 如果找不到订单，尝试查找所有未支付订单
-                const orderList = Array.from(orders.values());
-                const unpaidOrder = orderList.find(o => o.status !== "paid");
-                
-                if (unpaidOrder) {
-                  logger.info(`找到未支付订单: ${JSON.stringify(unpaidOrder)}`);
+                if (order) {
+                  logger.info(`找到内存中的订单: ${JSON.stringify(order)}`);
                   
-                  // 更新这个未支付订单
-                  unpaidOrder.status = "paid";
-                  unpaidOrder.paidAt = new Date();
-                  unpaidOrder.transactionId = transaction_id;
-                  unpaidOrder.openid = openid;
-                  orders.set(unpaidOrder.orderNo, unpaidOrder);
+                  // 验证金额是否一致
+                  if (Math.abs(order.amount - total_fee) > 0.01) {
+                    logger.error(`订单金额不匹配: ${order_sn}, 预期: ${order.amount}, 实际: ${total_fee}`);
+                    return res.json({ code: "SUCCESS", message: "OK" }); // 仍然返回成功给微信，但记录错误
+                  }
+                  
+                  logger.info(`订单金额验证通过: 预期=${order.amount}, 实际=${total_fee}`);
+                  
+                  // 检查订单是否已经支付，避免重复处理
+                  if (order.status === "paid") {
+                    logger.info(`订单已经是支付状态，跳过处理: ${order_sn}, 交易号: ${order.transactionId || '无'}`);
+                    return res.json({ code: "SUCCESS", message: "OK" });
+                  }
+                  
+                  // 更新内部订单状态
+                  order.status = "paid";
+                  order.paidAt = new Date();
+                  order.transactionId = transaction_id;
+                  order.openid = openid;
+                  orders.set(order_sn, order);
                   
                   // 保存到内存中的交易记录
-                  wxPaymentTransactions.set(unpaidOrder.orderNo, {
-                    orderSn: unpaidOrder.orderNo,
+                  wxPaymentTransactions.set(order_sn, {
+                    orderSn: order_sn,
                     transactionId: transaction_id,
                     openid: openid,
                     payTime: new Date()
                   });
                   
-                  // 保存到数据库中的交易记录
-                  await saveWxPaymentTransaction(unpaidOrder.orderNo, transaction_id);
+                  logger.info(`订单支付成功: ${order_sn}, 外部订单: ${order.externalOrderId || '无'}`);
                   
-                  logger.info(`更新未支付订单: ${unpaidOrder.orderNo}, 外部订单: ${unpaidOrder.externalOrderId || '无'}`);
-                  
-                  // 通知老后端
-                  if (unpaidOrder.externalOrderId) {
-                    await notifyOldBackend(unpaidOrder.externalOrderId, unpaidOrder.userId);
+                  // 如果是外部订单，通知老后端更新订单状态
+                  if (order.externalOrderId) {
+                    await notifyOldBackend(order.externalOrderId, order.userId);
                   }
                 } else {
-                  logger.warn("没有找到任何未支付订单");
+                  logger.info(`内存中未找到订单，但已更新数据库中的订单状态: ${order_sn}`);
                 }
+              } catch (dbError) {
+                logger.error(`查询或更新订单信息失败: ${dbError.message}`);
+                logger.error(dbError.stack);
+                return res.json({ code: "SUCCESS", message: "OK" }); // 仍然返回成功给微信，但记录错误
               }
             } else {
               logger.warn(`支付未成功: ${decryptedData.trade_state}`);
