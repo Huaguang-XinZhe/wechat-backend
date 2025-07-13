@@ -36,6 +36,17 @@ const authMiddleware = async (req, res, next) => {
         });
       }
 
+      // 特殊处理：如果是admin用户，直接通过认证
+      if (openid === 'admin') {
+        logger.info('管理员token，跳过用户查找，直接通过认证');
+        req.user = {
+          openid: 'admin',
+          isAdmin: true,
+          username: 'admin'
+        };
+        return next();
+      }
+
       // 查找用户
       logger.info(`准备查找用户，openid: ${openid}`);
       const user = await UserAdapterService.findUserByOpenid(openid);
@@ -90,9 +101,18 @@ const optionalAuth = async (req, res, next) => {
         const openid = decoded.sub;
 
         if (openid) {
-          const user = await UserAdapterService.findUserByOpenid(openid);
-          if (user) {
-            req.user = user;
+          // 特殊处理：如果是admin用户，直接通过认证
+          if (openid === 'admin') {
+            req.user = {
+              openid: 'admin',
+              isAdmin: true,
+              username: 'admin'
+            };
+          } else {
+            const user = await UserAdapterService.findUserByOpenid(openid);
+            if (user) {
+              req.user = user;
+            }
           }
         }
       } catch (error) {
@@ -160,6 +180,17 @@ const noVerifyAuthMiddleware = async (req, res, next) => {
           message: "无效的 token: 没有找到 openid",
           code: 401,
         });
+      }
+
+      // 特殊处理：如果是admin用户，直接通过认证
+      if (openid === 'admin') {
+        logger.debug('管理员token，跳过用户查找，直接通过认证');
+        req.user = {
+          openid: 'admin',
+          isAdmin: true,
+          username: 'admin'
+        };
+        return next();
       }
 
       // 查找用户
