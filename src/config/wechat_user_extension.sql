@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS `ums_member_wechat` (
 CREATE TABLE IF NOT EXISTS `wx_payment_transaction` (
   `order_sn` varchar(64) NOT NULL COMMENT '订单编号',
   `transaction_id` varchar(64) NOT NULL COMMENT '微信支付交易号',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   PRIMARY KEY (`order_sn`)
-) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8mb4 COMMENT='微信支付交易记录表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='微信支付交易记录表';
 
