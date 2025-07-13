@@ -12,37 +12,44 @@ const dbConfig = require('../config/database');
 const OLD_BACKEND_URL = process.env.LEGACY_BACKEND_URL || "https://boyangchuanggu.com";
 
 // 保存微信支付交易信息到数据库
-async function saveWxPaymentTransaction(transactionId, openid) {
+async function saveWxPaymentTransaction(orderSn, transactionId) {
   try {
-    logger.info(`保存微信支付交易信息: 交易号=${transactionId}, openid=${openid}`);
+    logger.info(`保存微信支付交易信息: 订单号=${orderSn}, 交易号=${transactionId}`);
     
     // 创建数据库连接
     const connection = await mysql.createConnection(dbConfig);
     
-    // 检查是否已存在记录
-    const [existingRows] = await connection.execute(
-      'SELECT transaction_id FROM wx_payment_transaction WHERE transaction_id = ?',
-      [transactionId]
-    );
-    
-    if (existingRows.length > 0) {
-      logger.info(`交易记录已存在，更新: ${transactionId}`);
-      await connection.execute(
-        'UPDATE wx_payment_transaction SET openid = ? WHERE transaction_id = ?',
-        [openid, transactionId]
+    try {
+      // 检查是否已存在记录
+      const [existingRows] = await connection.execute(
+        'SELECT order_sn FROM wx_payment_transaction WHERE order_sn = ?',
+        [orderSn]
       );
-    } else {
-      logger.info(`创建新的交易记录: ${transactionId}`);
-      await connection.execute(
-        'INSERT INTO wx_payment_transaction (transaction_id, openid) VALUES (?, ?)',
-        [transactionId, openid]
-      );
+      
+      if (existingRows.length > 0) {
+        logger.info(`交易记录已存在，更新: ${orderSn}`);
+        await connection.execute(
+          'UPDATE wx_payment_transaction SET transaction_id = ? WHERE order_sn = ?',
+          [transactionId, orderSn]
+        );
+      } else {
+        logger.info(`创建新的交易记录: ${orderSn}`);
+        await connection.execute(
+          'INSERT INTO wx_payment_transaction (order_sn, transaction_id) VALUES (?, ?)',
+          [orderSn, transactionId]
+        );
+      }
+      
+      logger.info(`微信支付交易信息保存成功: ${orderSn} -> ${transactionId}`);
+      return true;
+    } catch (dbError) {
+      logger.error(`数据库操作失败: ${dbError.message}`);
+      logger.error(dbError.stack);
+      return false;
+    } finally {
+      // 关闭连接
+      await connection.end();
     }
-    
-    // 关闭连接
-    await connection.end();
-    logger.info(`微信支付交易信息保存成功: ${transactionId}`);
-    return true;
   } catch (error) {
     logger.error(`保存微信支付交易信息失败: ${error.message}`);
     logger.error(error.stack);
@@ -109,7 +116,7 @@ router.post("/notify", (req, res) => {
               logger.info(`支付成功: 订单号=${out_trade_no}, 交易号=${transaction_id}, 金额=${total_fee}元, openid=${openid}`);
               
               // 保存微信支付交易信息
-              await saveWxPaymentTransaction(transaction_id, openid);
+              await saveWxPaymentTransaction(out_trade_no, transaction_id);
               
               // 查找对应的订单
               const order = orders.get(out_trade_no);
@@ -176,6 +183,9 @@ router.post("/notify", (req, res) => {
                     openid: openid,
                     payTime: new Date()
                   });
+                  
+                  // 保存到数据库中的交易记录
+                  await saveWxPaymentTransaction(unpaidOrder.orderNo, transaction_id);
                   
                   logger.info(`更新未支付订单: ${unpaidOrder.orderNo}, 外部订单: ${unpaidOrder.externalOrderId || '无'}`);
                   
