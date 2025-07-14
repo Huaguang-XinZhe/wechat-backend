@@ -208,53 +208,61 @@ router.get('/transaction/user/:openid', authMiddleware, async (req, res) => {
 });
 
 // 获取物流查询token
-router.get('/token/:orderSn', authMiddleware, async (req, res) => {
+router.get('/token/:orderId', async (req, res) => {
   try {
-    const { orderSn } = req.params;
-    const { goodsName, goodsImgUrl } = req.query; // 从前端传递的查询参数中获取商品信息
+    const { orderId } = req.params;
+    const { goodsName, goodsImgUrl, deliverySn } = req.query; // 从前端传递的查询参数中获取商品信息和物流单号
     
-    logger.info(`获取物流查询token: ${orderSn}, 商品名称: ${goodsName || '未提供'}`);
+    logger.info(`获取物流查询token: 订单ID=${orderId}, 商品名称: ${goodsName || '未提供'}, 物流单号: ${deliverySn || '未提供'}`);
     
-    // 查询订单物流信息和收件人信息
-    const orderRows = await legacySequelize.query(
-      'SELECT delivery_company, delivery_sn, receiver_phone FROM oms_order WHERE order_sn = ? LIMIT 1',
-      {
-        replacements: [orderSn],
-        type: legacySequelize.QueryTypes.SELECT
+    // 如果前端没有传递物流单号，则从数据库查询
+    let orderDeliverySn = deliverySn;
+    let deliveryCompany = '';
+    
+    if (!orderDeliverySn) {
+      // 查询订单物流信息 - 使用订单ID
+      const orderRows = await legacySequelize.query(
+        'SELECT delivery_company, delivery_sn, order_sn FROM oms_order WHERE id = ? LIMIT 1',
+        {
+          replacements: [orderId],
+          type: legacySequelize.QueryTypes.SELECT
+        }
+      );
+      
+      if (orderRows.length === 0) {
+        logger.warn(`未找到订单物流信息: 订单ID=${orderId}`);
+        return res.status(404).json({
+          code: 404,
+          message: '未找到订单物流信息'
+        });
       }
-    );
-    
-    if (orderRows.length === 0) {
-      logger.warn(`未找到订单物流信息: ${orderSn}`);
-      return res.status(404).json({
-        code: 404,
-        message: '未找到订单物流信息'
-      });
+      
+      deliveryCompany = orderRows[0].delivery_company;
+      orderDeliverySn = orderRows[0].delivery_sn;
+      const orderSn = orderRows[0].order_sn;
+      
+      if (!deliveryCompany || !orderDeliverySn) {
+        logger.warn(`订单未发货: 订单ID=${orderId}, 订单编号=${orderSn}`);
+        return res.status(400).json({
+          code: 400,
+          message: '订单未发货'
+        });
+      }
+      
+      logger.info(`查询到订单物流信息: 订单ID=${orderId}, 订单编号=${orderSn}, 物流公司=${deliveryCompany}, 物流单号=${orderDeliverySn}`);
     }
     
-    const deliveryCompany = orderRows[0].delivery_company;
-    const deliverySn = orderRows[0].delivery_sn;
-    const receiverPhone = orderRows[0].receiver_phone || '123456789'; // 收件人电话，必填项
-    
-    if (!deliveryCompany || !deliverySn) {
-      logger.warn(`订单未发货: ${orderSn}`);
-      return res.status(400).json({
-        code: 400,
-        message: '订单未发货'
-      });
-    }
-    
-    // 查询交易信息
+    // 查询交易信息 - 使用订单ID
     const transactionRows = await legacySequelize.query(
-      'SELECT transaction_id FROM wx_payment_transaction WHERE order_sn = ? LIMIT 1',
+      'SELECT t.transaction_id, o.member_username FROM wx_payment_transaction t JOIN oms_order o ON t.order_sn = o.order_sn WHERE o.id = ? LIMIT 1',
       {
-        replacements: [orderSn],
+        replacements: [orderId],
         type: legacySequelize.QueryTypes.SELECT
       }
     );
     
     if (transactionRows.length === 0) {
-      logger.warn(`未找到交易信息: ${orderSn}`);
+      logger.warn(`未找到交易信息: 订单ID=${orderId}`);
       return res.status(400).json({
         code: 400,
         message: '未找到交易信息'
@@ -263,20 +271,12 @@ router.get('/token/:orderSn', authMiddleware, async (req, res) => {
     
     const transactionId = transactionRows[0].transaction_id;
     
-    // 查询用户openid
-    const userRows = await legacySequelize.query(
-      'SELECT member_username FROM oms_order WHERE order_sn = ? LIMIT 1',
-      {
-        replacements: [orderSn],
-        type: legacySequelize.QueryTypes.SELECT
-      }
-    );
-    
-    const openid = userRows.length > 0 && userRows[0].member_username ? 
-      Buffer.from(userRows[0].member_username, 'base64').toString() : '';
+    // 获取用户openid - 直接从交易信息中获取
+    const encodedUsername = transactionRows[0].member_username;
+    const openid = encodedUsername ? Buffer.from(encodedUsername, 'base64').toString() : '';
     
     if (!openid) {
-      logger.warn(`未找到用户openid: ${orderSn}`);
+      logger.warn(`未找到用户openid: 订单ID=${orderId}`);
       return res.status(400).json({
         code: 400,
         message: '未找到用户openid'
@@ -287,10 +287,10 @@ router.get('/token/:orderSn', authMiddleware, async (req, res) => {
     const wechatDeliveryService = require('../services/wechatDeliveryService');
     const result = await wechatDeliveryService.getLogisticsToken({
       transactionId,
-      expressCompany: deliveryCompany,
-      trackingNo: deliverySn,
+      expressCompany: deliveryCompany || 'SF', // 如果没有物流公司信息，默认使用顺丰
+      trackingNo: orderDeliverySn,
       openid,
-      receiverPhone,
+      receiverPhone: '123456789', // 使用默认值，实际场景可能需要从订单中获取
       goodsName: goodsName || '订单商品', // 使用前端传递的商品名称，如果没有则使用默认值
       goodsImgUrl: goodsImgUrl || 'https://mmbiz.qpic.cn/mmbiz_png/xxx/0?wx_fmt=png' // 使用前端传递的商品图片，如果没有则使用默认值
     });
@@ -303,7 +303,7 @@ router.get('/token/:orderSn', authMiddleware, async (req, res) => {
       });
     }
     
-    logger.info(`成功获取物流查询token: ${orderSn}`);
+    logger.info(`成功获取物流查询token: 订单ID=${orderId}`);
     return res.json({
       code: 200,
       data: result.data,
