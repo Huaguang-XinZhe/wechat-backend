@@ -88,6 +88,75 @@ async function uploadShippingInfo(params) {
   }
 }
 
+/**
+ * 获取物流查询token
+ * @param {Object} params 物流信息参数
+ * @returns {Promise<Object>} 获取结果
+ */
+async function getLogisticsToken(params) {
+  try {
+    const {
+      transactionId,
+      expressCompany,
+      trackingNo,
+      openid
+    } = params;
+
+    logger.info(`获取物流查询token: 交易号=${transactionId}, 物流公司=${expressCompany}, 运单号=${trackingNo}`);
+
+    // 获取微信access_token
+    const wechatService = require('./wechatService');
+    const accessToken = await wechatService.getAccessToken();
+    logger.info(`成功获取access_token: ${accessToken.substring(0, 10)}...`);
+
+    // 构建请求URL
+    const url = `https://api.weixin.qq.com/cgi-bin/express/delivery/open_msg/trace_waybill?access_token=${accessToken}`;
+    logger.info(`开始调用微信物流查询API: ${url}`);
+
+    // 构建请求数据
+    const requestData = {
+      order_id: transactionId, // 交易单号
+      delivery_id: expressCompany, // 快递公司ID
+      waybill_id: trackingNo, // 运单号
+      openid: openid, // 用户openid
+      biz_id: process.env.WX_BIZ_ID || 'mall_logistics' // 商户ID，需要在微信后台申请
+    };
+
+    logger.info(`请求数据: ${JSON.stringify(requestData)}`);
+
+    // 发送请求
+    const response = await axios.post(url, requestData);
+    logger.info(`微信物流查询API响应: ${JSON.stringify(response.data)}`);
+
+    // 检查响应
+    if (response.data.errcode === 0) {
+      logger.info('获取物流查询token成功');
+      return {
+        success: true,
+        data: {
+          waybillToken: response.data.waybill_token
+        },
+        message: '获取物流查询token成功'
+      };
+    } else {
+      logger.error(`微信接口错误: ${response.data.errcode} - ${response.data.errmsg}`);
+      return {
+        success: false,
+        data: response.data,
+        message: `微信接口错误: ${response.data.errmsg}`
+      };
+    }
+  } catch (error) {
+    logger.error(`获取物流查询token失败: ${error.message}`);
+    logger.error(error.stack);
+    return {
+      success: false,
+      message: `获取物流查询token失败: ${error.message}`
+    };
+  }
+}
+
 module.exports = {
-  uploadShippingInfo
+  uploadShippingInfo,
+  getLogisticsToken
 }; 

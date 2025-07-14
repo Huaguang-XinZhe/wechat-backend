@@ -207,6 +207,112 @@ router.get('/transaction/user/:openid', authMiddleware, async (req, res) => {
   }
 });
 
+// 获取物流查询token
+router.get('/token/:orderSn', authMiddleware, async (req, res) => {
+  try {
+    const { orderSn } = req.params;
+    logger.info(`获取物流查询token: ${orderSn}`);
+    
+    // 查询订单物流信息
+    const orderRows = await legacySequelize.query(
+      'SELECT delivery_company, delivery_sn FROM oms_order WHERE order_sn = ? LIMIT 1',
+      {
+        replacements: [orderSn],
+        type: legacySequelize.QueryTypes.SELECT
+      }
+    );
+    
+    if (orderRows.length === 0) {
+      logger.warn(`未找到订单物流信息: ${orderSn}`);
+      return res.status(404).json({
+        code: 404,
+        message: '未找到订单物流信息'
+      });
+    }
+    
+    const deliveryCompany = orderRows[0].delivery_company;
+    const deliverySn = orderRows[0].delivery_sn;
+    
+    if (!deliveryCompany || !deliverySn) {
+      logger.warn(`订单未发货: ${orderSn}`);
+      return res.status(400).json({
+        code: 400,
+        message: '订单未发货'
+      });
+    }
+    
+    // 查询交易信息
+    const transactionRows = await legacySequelize.query(
+      'SELECT transaction_id FROM wx_payment_transaction WHERE order_sn = ? LIMIT 1',
+      {
+        replacements: [orderSn],
+        type: legacySequelize.QueryTypes.SELECT
+      }
+    );
+    
+    if (transactionRows.length === 0) {
+      logger.warn(`未找到交易信息: ${orderSn}`);
+      return res.status(400).json({
+        code: 400,
+        message: '未找到交易信息'
+      });
+    }
+    
+    const transactionId = transactionRows[0].transaction_id;
+    
+    // 查询用户openid
+    const userRows = await legacySequelize.query(
+      'SELECT member_username FROM oms_order WHERE order_sn = ? LIMIT 1',
+      {
+        replacements: [orderSn],
+        type: legacySequelize.QueryTypes.SELECT
+      }
+    );
+    
+    const openid = userRows.length > 0 && userRows[0].member_username ? 
+      Buffer.from(userRows[0].member_username, 'base64').toString() : '';
+    
+    if (!openid) {
+      logger.warn(`未找到用户openid: ${orderSn}`);
+      return res.status(400).json({
+        code: 400,
+        message: '未找到用户openid'
+      });
+    }
+    
+    // 调用微信物流服务获取token
+    const wechatDeliveryService = require('../services/wechatDeliveryService');
+    const result = await wechatDeliveryService.getLogisticsToken({
+      transactionId,
+      expressCompany: deliveryCompany,
+      trackingNo: deliverySn,
+      openid
+    });
+    
+    if (!result.success) {
+      logger.warn(`获取物流查询token失败: ${result.message}`);
+      return res.status(500).json({
+        code: 500,
+        message: `获取物流查询token失败: ${result.message}`
+      });
+    }
+    
+    logger.info(`成功获取物流查询token: ${orderSn}`);
+    return res.json({
+      code: 200,
+      data: result.data,
+      message: '获取成功'
+    });
+  } catch (error) {
+    logger.error(`获取物流查询token失败: ${error.message}`);
+    logger.error(error.stack);
+    return res.status(500).json({
+      code: 500,
+      message: '服务器错误'
+    });
+  }
+});
+
 // 提交微信物流信息
 router.post('/submit', authMiddleware, async (req, res) => {
   try {
