@@ -10,6 +10,7 @@ const {
   generateOrderNo,
   getClientIp,
 } = require("../models/orderModels");
+const { legacySequelize } = require("../config/legacyDatabase");
 
 // 创建支付订单
 router.post("/create", authMiddleware, async (req, res, next) => {
@@ -229,6 +230,93 @@ router.post("/cancel/:orderNo", authMiddleware, async (req, res, next) => {
     });
   } catch (error) {
     logger.error("取消订单失败:", error);
+    next(error);
+  }
+});
+
+// 确认收货
+router.post("/confirmReceive", authMiddleware, async (req, res, next) => {
+  try {
+    const { orderId, orderSn } = req.body;
+    const user = req.user;
+
+    if (!orderId && !orderSn) {
+      return res.status(400).json({
+        success: false,
+        message: "请提供订单ID或订单编号",
+        code: 400,
+      });
+    }
+
+    // 构建查询条件
+    let whereClause = {};
+    if (orderId) {
+      whereClause.id = orderId;
+    } else if (orderSn) {
+      whereClause.order_sn = orderSn;
+    }
+
+    // 添加用户ID条件，确保只能确认自己的订单
+    whereClause.member_id = user.id;
+    
+    // 查询订单
+    const [results] = await legacySequelize.query(
+      `SELECT id, status, order_sn FROM oms_order WHERE ${
+        orderId ? 'id = :orderId' : 'order_sn = :orderSn'
+      } AND member_id = :memberId`,
+      {
+        replacements: {
+          orderId,
+          orderSn,
+          memberId: user.id,
+        },
+        type: legacySequelize.QueryTypes.SELECT,
+      }
+    );
+
+    if (!results) {
+      return res.status(404).json({
+        success: false,
+        message: "订单不存在或不属于当前用户",
+        code: 404,
+      });
+    }
+
+    // 检查订单状态是否为待收货状态(2)
+    if (results.status !== 2) {
+      return res.status(400).json({
+        success: false,
+        message: "只有待收货状态的订单才能确认收货",
+        code: 400,
+      });
+    }
+
+    // 更新订单状态为已完成(3)，并设置确认收货时间
+    const now = new Date();
+    await legacySequelize.query(
+      `UPDATE oms_order SET status = 3, confirm_status = 1, receive_time = :receiveTime WHERE id = :orderId`,
+      {
+        replacements: {
+          orderId: results.id,
+          receiveTime: now,
+        },
+        type: legacySequelize.QueryTypes.UPDATE,
+      }
+    );
+
+    logger.info(`用户 ${user.id} 确认收货成功: 订单ID=${results.id}, 订单编号=${results.order_sn}`);
+
+    res.json({
+      success: true,
+      message: "确认收货成功",
+      data: {
+        orderId: results.id,
+        orderSn: results.order_sn,
+        receiveTime: now,
+      },
+    });
+  } catch (error) {
+    logger.error("确认收货失败:", error);
     next(error);
   }
 });

@@ -12,6 +12,7 @@ const {
   getClientIp,
   users,
 } = require("../models/orderModels");
+const { legacySequelize } = require("../config/legacyDatabase");
 
 // 微信小程序支付测试
 router.post("/wxMiniPay", authMiddleware, async (req, res, next) => {
@@ -256,6 +257,68 @@ router.post("/updateExternalOrderStatus", authMiddleware, async (req, res, next)
     });
   } catch (error) {
     logger.error("手动更新外部订单状态失败:", error);
+    next(error);
+  }
+});
+
+// 根据订单编号获取微信支付交易号
+router.get("/getWxTransactionId", authMiddleware, async (req, res, next) => {
+  try {
+    const { orderSn } = req.query;
+    const user = req.user;
+
+    if (!orderSn) {
+      return res.status(400).json({
+        success: false,
+        message: "请提供订单编号",
+        code: 400,
+      });
+    }
+
+    logger.info(`查询订单交易ID: orderSn=${orderSn}, userId=${user.id}`);
+
+    // 从数据库中查询订单的交易ID
+    const [order] = await legacySequelize.query(
+      `SELECT id, order_sn, transaction_id FROM oms_order 
+       WHERE order_sn = :orderSn AND member_id = :userId`,
+      {
+        replacements: {
+          orderSn: orderSn,
+          userId: user.id,
+        },
+        type: legacySequelize.QueryTypes.SELECT,
+      }
+    );
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "订单不存在或不属于当前用户",
+        code: 404,
+      });
+    }
+
+    if (!order.transaction_id) {
+      return res.status(400).json({
+        success: false,
+        message: "该订单没有关联的支付交易号",
+        code: 400,
+      });
+    }
+
+    logger.info(`查询成功: orderSn=${orderSn}, transactionId=${order.transaction_id}`);
+
+    res.json({
+      success: true,
+      message: "查询成功",
+      data: {
+        orderId: order.id,
+        orderSn: order.order_sn,
+        transaction_id: order.transaction_id,
+      },
+    });
+  } catch (error) {
+    logger.error("查询订单交易ID失败:", error);
     next(error);
   }
 });
