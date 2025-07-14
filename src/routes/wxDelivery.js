@@ -211,11 +211,13 @@ router.get('/transaction/user/:openid', authMiddleware, async (req, res) => {
 router.get('/token/:orderSn', authMiddleware, async (req, res) => {
   try {
     const { orderSn } = req.params;
-    logger.info(`获取物流查询token: ${orderSn}`);
+    const { goodsName, goodsImgUrl } = req.query; // 从前端传递的查询参数中获取商品信息
     
-    // 查询订单物流信息
+    logger.info(`获取物流查询token: ${orderSn}, 商品名称: ${goodsName || '未提供'}`);
+    
+    // 查询订单物流信息和收件人信息
     const orderRows = await legacySequelize.query(
-      'SELECT delivery_company, delivery_sn FROM oms_order WHERE order_sn = ? LIMIT 1',
+      'SELECT delivery_company, delivery_sn, receiver_phone FROM oms_order WHERE order_sn = ? LIMIT 1',
       {
         replacements: [orderSn],
         type: legacySequelize.QueryTypes.SELECT
@@ -232,6 +234,7 @@ router.get('/token/:orderSn', authMiddleware, async (req, res) => {
     
     const deliveryCompany = orderRows[0].delivery_company;
     const deliverySn = orderRows[0].delivery_sn;
+    const receiverPhone = orderRows[0].receiver_phone || '123456789'; // 收件人电话，必填项
     
     if (!deliveryCompany || !deliverySn) {
       logger.warn(`订单未发货: ${orderSn}`);
@@ -286,7 +289,10 @@ router.get('/token/:orderSn', authMiddleware, async (req, res) => {
       transactionId,
       expressCompany: deliveryCompany,
       trackingNo: deliverySn,
-      openid
+      openid,
+      receiverPhone,
+      goodsName: goodsName || '订单商品', // 使用前端传递的商品名称，如果没有则使用默认值
+      goodsImgUrl: goodsImgUrl || 'https://mmbiz.qpic.cn/mmbiz_png/xxx/0?wx_fmt=png' // 使用前端传递的商品图片，如果没有则使用默认值
     });
     
     if (!result.success) {

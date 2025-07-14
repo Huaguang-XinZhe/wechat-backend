@@ -99,7 +99,11 @@ async function getLogisticsToken(params) {
       transactionId,
       expressCompany,
       trackingNo,
-      openid
+      openid,
+      receiverPhone,
+      receiverName,
+      goodsName,
+      goodsImgUrl
     } = params;
 
     logger.info(`获取物流查询token: 交易号=${transactionId}, 物流公司=${expressCompany}, 运单号=${trackingNo}`);
@@ -109,18 +113,31 @@ async function getLogisticsToken(params) {
     const accessToken = await wechatService.getAccessToken();
     logger.info(`成功获取access_token: ${accessToken.substring(0, 10)}...`);
 
-    // 构建请求URL
+    // 构建请求URL - 使用官方文档中的URL
     const url = `https://api.weixin.qq.com/cgi-bin/express/delivery/open_msg/trace_waybill?access_token=${accessToken}`;
     logger.info(`开始调用微信物流查询API: ${url}`);
 
-    // 构建请求数据
+    // 构建请求数据 - 按照官方文档格式
     const requestData = {
-      order_id: transactionId, // 交易单号
+      openid: openid, // 用户openid
       delivery_id: expressCompany, // 快递公司ID
       waybill_id: trackingNo, // 运单号
-      openid: openid, // 用户openid
-      biz_id: process.env.WX_BIZ_ID || 'mall_logistics' // 商户ID，需要在微信后台申请
+      trans_id: transactionId, // 交易单号（微信支付生成的交易单号）
+      receiver_phone: receiverPhone || "123456789", // 收件人手机号，必填项
+      goods_info: {
+        detail_list: [
+          {
+            goods_name: goodsName || "订单商品", // 商品名称
+            goods_img_url: goodsImgUrl || "https://mmbiz.qpic.cn/mmbiz_png/xxx/0?wx_fmt=png" // 商品图片URL
+          }
+        ]
+      }
     };
+
+    // 如果有发件人手机号，添加到请求中
+    if (params.senderPhone) {
+      requestData.sender_phone = params.senderPhone;
+    }
 
     logger.info(`请求数据: ${JSON.stringify(requestData)}`);
 
