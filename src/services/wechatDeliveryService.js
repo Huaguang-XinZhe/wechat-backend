@@ -96,7 +96,6 @@ async function uploadShippingInfo(params) {
 async function getLogisticsToken(params) {
   try {
     const {
-      transactionId,
       expressCompany,
       trackingNo,
       openid,
@@ -106,7 +105,7 @@ async function getLogisticsToken(params) {
       goodsImgUrl
     } = params;
 
-    logger.info(`获取物流查询token: 交易号=${transactionId}, 物流公司=${expressCompany}, 运单号=${trackingNo}`);
+    logger.info(`获取物流查询token: 物流公司=${expressCompany}, 运单号=${trackingNo}`);
 
     // 获取微信access_token
     const wechatService = require('./wechatService');
@@ -122,7 +121,6 @@ async function getLogisticsToken(params) {
       openid: openid, // 用户openid
       delivery_id: expressCompany, // 快递公司ID
       waybill_id: trackingNo, // 运单号
-      trans_id: transactionId, // 交易单号（微信支付生成的交易单号）
       receiver_phone: receiverPhone || "123456789", // 收件人手机号，必填项
       goods_info: {
         detail_list: [
