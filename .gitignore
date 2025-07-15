@@ -68,3 +68,5 @@ docker-compose.override.yml
 
 # 测试文件
 test-results/
+
+db_ddl/

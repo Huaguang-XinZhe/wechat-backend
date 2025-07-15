@@ -19,6 +19,7 @@ const authLegacyRoutes = require("./routes/auth-legacy"); // 添加老系统兼�
 const testRoutes = require("./routes/test"); // 添加测试路由
 const wxDeliveryRoutes = require("./routes/wxDelivery"); // 添加微信物流相关路由
 const ordersRoutes = require("./routes/orders"); // 添加订单相关路由
+const withdrawRoutes = require("./routes/withdraw"); // 添加提现相关路由
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -325,6 +326,8 @@ app.use("/api/test", testRoutes);
 app.use("/api/orders", ordersRoutes);
 // 添加微信物流相关路由
 app.use("/api/wx-delivery", wxDeliveryRoutes);
+// 添加提现相关路由
+app.use("/api/withdraw", withdrawRoutes);
 
 // 404 处理
 app.use("*", (req, res) => {

@@ -473,4 +473,97 @@ router.get("/inviteStats", noVerifyAuthMiddleware, async (req, res, next) => {
   }
 });
 
+// 获取邀请提现信息
+router.get("/inviteWithdrawInfo", noVerifyAuthMiddleware, async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const withdrawInfo = await UserAdapterService.getInviteWithdrawInfo(userId);
+
+    res.json({
+      success: true,
+      message: "获取邀请提现信息成功",
+      data: {
+        inviteCode: withdrawInfo.inviteCode,
+        invitedCount: withdrawInfo.invitedCount,
+        commissionRate: withdrawInfo.commissionRate,
+        totalOrderAmount: withdrawInfo.totalOrderAmount,
+        availableCommission: withdrawInfo.availableCommission,
+        openid: withdrawInfo.openid
+      },
+    });
+  } catch (error) {
+    logger.error("获取邀请提现信息失败:", error);
+    next(error);
+  }
+});
+
+// 申请提现
+router.post("/withdrawCommission", noVerifyAuthMiddleware, async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { amount } = req.body;
+    
+    // 验证提现金额
+    if (!amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "提现金额无效",
+        code: 400,
+      });
+    }
+    
+    const requestAmount = parseFloat(amount);
+    
+    // 获取最小和最大提现金额限制
+    const minWithdrawAmount = parseFloat(process.env.MIN_WITHDRAW_AMOUNT || 10);
+    const maxWithdrawAmount = parseFloat(process.env.MAX_WITHDRAW_AMOUNT || 5000);
+    
+    // 验证提现金额是否在允许范围内
+    if (requestAmount < minWithdrawAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `提现金额不能低于${minWithdrawAmount}元`,
+        code: 400,
+      });
+    }
+    
+    if (requestAmount > maxWithdrawAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `提现金额不能超过${maxWithdrawAmount}元`,
+        code: 400,
+      });
+    }
+    
+    // 获取用户提现信息
+    const withdrawInfo = await UserAdapterService.getInviteWithdrawInfo(userId);
+    const availableAmount = parseFloat(withdrawInfo.availableCommission);
+    
+    // 验证可提现金额
+    if (requestAmount > availableAmount) {
+      return res.status(400).json({
+        success: false,
+        message: "提现金额超过可提现金额",
+        code: 400,
+      });
+    }
+    
+    // TODO: 实际的提现处理逻辑，可能需要调用微信支付接口
+    // 这里只是模拟成功
+    
+    res.json({
+      success: true,
+      message: "提现申请已提交",
+      data: {
+        withdrawAmount: requestAmount.toFixed(2),
+        status: "processing",
+        requestTime: new Date().toISOString()
+      },
+    });
+  } catch (error) {
+    logger.error("提现申请失败:", error);
+    next(error);
+  }
+});
+
 module.exports = router;

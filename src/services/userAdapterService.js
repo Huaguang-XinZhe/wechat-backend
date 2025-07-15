@@ -499,12 +499,123 @@ class UserAdapterService {
       return {
         invitedCount,
         inviteCode: wechatInfo.invite_code,
+        openid: wechatInfo.openid
       };
     } catch (error) {
       logger.error("获取邀请统计失败:", error);
       return {
         invitedCount: 0,
         inviteCode: null,
+      };
+    }
+  }
+  
+  /**
+   * 获取用户邀请提现信息
+   * @param {number} userId 用户ID
+   * @returns {Promise<Object>} 邀请提现信息
+   */
+  static async getInviteWithdrawInfo(userId) {
+    try {
+      // 获取基本邀请统计
+      const stats = await this.getInviteStats(userId);
+      
+      // 获取分成比例（从环境变量或配置中获取，默认为30%）
+      const commissionRate = parseFloat(process.env.COMMISSION_RATE || 0.3);
+      
+      // 获取该用户邀请的所有用户的订单总金额
+      // 这里需要根据实际数据库结构查询订单表
+      // 假设订单表为 oms_order，字段为 member_id（用户ID）和 total_amount（订单总金额）
+      // 并且只计算已确认收货的订单（status = 3）
+      
+      let totalOrderAmount = 0;
+      let availableCommission = 0;
+      let confirmedOrders = [];
+      let transactionIds = [];
+      
+      // 如果有邀请码，才计算提现金额
+      if (stats.inviteCode) {
+        try {
+          // 查询所有被该用户邀请的用户
+          const invitedUsers = await UmsMemberWechat.findAll({
+            where: { invite_from: stats.inviteCode },
+          });
+          
+          // 提取被邀请用户的ID列表
+          const invitedUserIds = [];
+          for (const invitedUser of invitedUsers) {
+            // 根据openid查找用户ID
+            const originalOpenid = invitedUser.openid;
+            const base64Openid = this.encodeOpenidToBase64(originalOpenid);
+            
+            const member = await UmsMember.findOne({
+              where: { username: base64Openid },
+            });
+            
+            if (member) {
+              invitedUserIds.push(member.id);
+            }
+          }
+          
+          // 如果有被邀请的用户，查询他们的已确认收货订单
+          if (invitedUserIds.length > 0) {
+            // 查询所有已确认收货的订单（status = 3）
+            const [orders] = await legacySequelize.query(`
+              SELECT id, order_sn, pay_amount, member_id
+              FROM oms_order
+              WHERE member_id IN (${invitedUserIds.join(',')})
+              AND status = 3
+              AND confirm_status = 1
+            `);
+            
+            if (orders && orders.length > 0) {
+              confirmedOrders = orders;
+              
+              // 计算订单总金额
+              totalOrderAmount = orders.reduce((sum, order) => sum + parseFloat(order.pay_amount || 0), 0);
+              
+              // 根据订单编号查询对应的微信交易ID
+              const orderSns = orders.map(order => `'${order.order_sn}'`);
+              
+              if (orderSns.length > 0) {
+                const [transactions] = await legacySequelize.query(`
+                  SELECT order_sn, transaction_id
+                  FROM wx_payment_transaction
+                  WHERE order_sn IN (${orderSns.join(',')})
+                `);
+                
+                if (transactions && transactions.length > 0) {
+                  transactionIds = transactions;
+                }
+              }
+              
+              // 计算可提现金额
+              availableCommission = totalOrderAmount * commissionRate;
+            }
+          }
+        } catch (error) {
+          logger.error("计算订单金额失败:", error);
+        }
+      }
+      
+      return {
+        ...stats,
+        commissionRate,
+        totalOrderAmount: totalOrderAmount.toFixed(2),
+        availableCommission: availableCommission.toFixed(2),
+        confirmedOrders,
+        transactionIds
+      };
+    } catch (error) {
+      logger.error("获取邀请提现信息失败:", error);
+      return {
+        invitedCount: 0,
+        inviteCode: null,
+        commissionRate: 0,
+        totalOrderAmount: "0.00",
+        availableCommission: "0.00",
+        confirmedOrders: [],
+        transactionIds: []
       };
     }
   }
