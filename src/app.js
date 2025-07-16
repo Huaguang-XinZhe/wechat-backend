@@ -34,14 +34,6 @@ app.set("trust proxy", ["loopback", "linklocal", "uniquelocal"]);
 app.use(helmet()); // 安全头
 app.use(compression()); // 压缩响应
 
-// 添加中间件来捕获原始请求体
-app.use(express.json({ 
-  verify: (req, res, buf) => {
-    req.rawBody = buf.toString();
-    logger.info(`捕获到原始请求体: ${req.rawBody}`);
-  }
-}));
-
 // 配置跨域
 app.use(cors({
   origin: '*', // 允许所有来源
@@ -50,16 +42,36 @@ app.use(cors({
   credentials: true // 允许携带凭证
 }));
 
+// 修复请求体解析问题 - 先捕获原始请求体
+app.use((req, res, next) => {
+  let data = '';
+  req.on('data', chunk => {
+    data += chunk;
+  });
+  
+  req.on('end', () => {
+    req.rawBody = data;
+    
+    // 如果有内容，记录原始请求体
+    if (data) {
+      logger.info(`捕获到原始请求体: ${data}`);
+    }
+    
+    // 继续处理
+    next();
+  });
+});
+
+// 解析 JSON 请求体
+app.use(express.json({
+  limit: '10mb',
+  // 不在这里设置 verify，因为我们已经捕获了原始请求体
+}));
+
 // 解析application/x-www-form-urlencoded
 app.use(express.urlencoded({ 
   extended: true,
-  verify: (req, res, buf) => {
-    // 如果还没有设置rawBody，则设置
-    if (!req.rawBody) {
-      req.rawBody = buf.toString();
-      logger.info(`从urlencoded捕获原始请求体: ${req.rawBody}`);
-    }
-  }
+  limit: '10mb'
 }));
 
 // 记录所有请求
@@ -92,35 +104,6 @@ const limiter = rateLimit({
   validate: { trustProxy: false },
 });
 app.use("/api/", limiter);
-
-// 条件性解析请求体 - 跳过微信支付回调路径，避免 XML 数据被预先解析
-app.use((req, res, next) => {
-  // 捕获原始请求体
-  let rawBody = '';
-  req.on('data', chunk => {
-    rawBody += chunk.toString();
-  });
-  
-  req.on('end', () => {
-    req.rawBody = rawBody;
-    next();
-  });
-});
-
-app.use((req, res, next) => {
-  // 跳过微信支付回调和微信转账回调路径的 body parsing
-  if (req.url.includes('/payment/notify') || req.url.includes('/transfer/notify')) {
-    return next();
-  }
-  
-  // 对其他路径应用 body parser
-  express.json({ limit: "10mb" })(req, res, () => {
-    express.urlencoded({ extended: true, limit: "10mb" })(req, res, next);
-  });
-});
-
-// 为微信支付回调创建特殊的路由处理，跳过 body parser
-// app.use("/api/payment/notify", paymentNotifyRouter); // 移除此行
 
 // 请求日志
 app.use((req, res, next) => {
@@ -179,148 +162,6 @@ app.get("/", (req, res) => {
   });
 });
 
-// API 文档路径
-app.get("/api", (req, res) => {
-  res.json({
-    message: "微信小程序 API 文档",
-    version: "1.0.0",
-    mode: "老系统兼容模式",
-    note: "已对接老系统数据库",
-    baseURL: `http://localhost:${PORT}/api`,
-    endpoints: {
-      认证相关: {
-        微信登录: {
-          method: "POST",
-          url: "/api/auth/login",
-          description: "使用微信 code 进行登录，返回新用户标识或直接登录",
-          body: {
-            code: "微信登录 code",
-            userInfo: "用户信息（可选）",
-            inviteCode: "邀请码（可选）",
-          },
-          response: {
-            新用户: "返回 isNewUser: true, openid, session_key",
-            已注册用户: "返回 isNewUser: false, token, userInfo, inviteCode",
-          },
-        },
-        手机号登录: {
-          method: "POST",
-          url: "/api/auth/phoneLogin",
-          description: "使用微信手机号一键登录",
-          body: {
-            code: "微信登录 code",
-            encryptedData: "加密的手机号数据",
-            iv: "加密算法的初始向量",
-            inviteCode: "邀请码（新用户必需）",
-          },
-        },
-        邀请码注册: {
-          method: "POST",
-          url: "/api/auth/registerWithInviteCode",
-          description: "通过邀请码注册新用户",
-          body: {
-            openid: "用户 openid",
-            userInfo: {
-              nickName: "用户昵称",
-              avatarUrl: "头像地址",
-              gender: "性别 0-未知 1-男 2-女",
-              country: "国家",
-              province: "省份",
-              city: "城市",
-              language: "语言",
-            },
-            inviteCode: "邀请码（6位字母数字）",
-          },
-        },
-        验证邀请码: {
-          method: "POST",
-          url: "/api/auth/validateInviteCode",
-          description: "验证邀请码是否有效",
-          body: {
-            inviteCode: "邀请码",
-          },
-        },
-        更新用户资料: {
-          method: "POST",
-          url: "/api/auth/updateProfile",
-          description: "更新用户头像昵称等信息",
-          headers: {
-            Authorization: "Bearer your_jwt_token",
-          },
-          body: {
-            userInfo: {
-              nickName: "用户昵称",
-              avatarUrl: "头像地址",
-              gender: "性别 0-未知 1-男 2-女",
-              country: "国家",
-              province: "省份",
-              city: "城市",
-              language: "语言",
-            },
-          },
-        },
-        "验证 Token": {
-          method: "POST",
-          url: "/api/auth/verify",
-          description: "验证 JWT Token 是否有效",
-          headers: {
-            Authorization: "Bearer your_jwt_token",
-          },
-        },
-        邀请统计: {
-          method: "GET",
-          url: "/api/auth/inviteStats",
-          description: "获取用户邀请码和邀请统计信息",
-          headers: {
-            Authorization: "Bearer your_jwt_token",
-          },
-        },
-      },
-      支付相关: {
-        创建支付订单: {
-          method: "POST",
-          url: "/api/payment/create",
-          description: "创建微信支付订单",
-          headers: {
-            Authorization: "Bearer your_jwt_token",
-          },
-          body: {
-            goodsId: "商品ID",
-            goodsName: "商品名称",
-            amount: "金额（元）",
-            remark: "备注",
-          },
-        },
-        查询订单列表: {
-          method: "GET",
-          url: "/api/payment/orders",
-          description: "获取用户订单列表",
-          headers: {
-            Authorization: "Bearer your_jwt_token",
-          },
-          query: {
-            page: "页码（默认1）",
-            limit: "每页数量（默认10）",
-            status: "订单状态（可选）",
-          },
-        },
-      },
-      老系统兼容API: {
-        手机号登录: {
-          method: "POST",
-          url: "/api/legacy/auth/phoneLogin",
-          description: "兼容老系统的手机号登录API",
-          body: {
-            code: "微信登录 code",
-            encryptedData: "加密的手机号数据",
-            iv: "加密算法的初始向量",
-            inviteCode: "邀请码（新用户必需）",
-          },
-        },
-      },
-    },
-  });
-});
 
 // API 路由
 app.use("/api/auth", authRoutes);
