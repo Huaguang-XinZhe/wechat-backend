@@ -174,6 +174,52 @@ class WithdrawService {
   }
   
   /**
+   * 取消处理中的提现申请
+   * @param {number} userId 用户ID
+   * @returns {Promise<Object>} 取消结果
+   */
+  async cancelProcessingWithdraw(userId) {
+    try {
+      // 获取用户openid
+      const userInfo = await UserAdapterService.getUserInfo(userId);
+      if (!userInfo || !userInfo.openid) {
+        throw new Error("用户未绑定微信账号");
+      }
+      
+      // 查找处理中的提现记录
+      const processingWithdraw = await WxWithdrawRecord.findOne({
+        where: {
+          openid: userInfo.openid,
+          status: "PROCESSING"
+        },
+        order: [["create_time", "DESC"]]
+      });
+      
+      // 如果没有处理中的提现记录，直接返回成功
+      if (!processingWithdraw) {
+        return {
+          success: true,
+          message: "没有处理中的提现申请"
+        };
+      }
+      
+      // 更新提现记录状态为已取消
+      await processingWithdraw.update({
+        status: "CANCELLED"
+      });
+      
+      return {
+        success: true,
+        message: "提现申请已取消",
+        withdrawId: processingWithdraw.id
+      };
+    } catch (error) {
+      logger.error("取消提现申请失败:", error);
+      throw error;
+    }
+  }
+  
+  /**
    * 获取用户提现记录
    * @param {number} userId 用户ID
    * @param {Object} options 查询选项

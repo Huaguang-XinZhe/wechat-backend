@@ -80,6 +80,29 @@ router.post("/request", authMiddleware, async (req, res, next) => {
   }
 });
 
+// 取消提现申请
+router.post("/cancel", authMiddleware, async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    
+    // 调用提现服务取消处理中的提现
+    const cancelResult = await withdrawService.cancelProcessingWithdraw(userId);
+    
+    res.json({
+      success: true,
+      message: "提现申请已取消",
+      data: cancelResult
+    });
+  } catch (error) {
+    logger.error("取消提现申请失败:", error);
+    res.status(400).json({
+      success: false,
+      message: error.message || "取消提现申请失败",
+      code: 400,
+    });
+  }
+});
+
 // 获取提现记录
 router.get("/records", authMiddleware, async (req, res, next) => {
   try {

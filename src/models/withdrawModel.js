@@ -35,7 +35,7 @@ const WxWithdrawRecord = legacySequelize.define(
       type: DataTypes.STRING(20),
       allowNull: false,
       defaultValue: "PROCESSING",
-      comment: "状态：PROCESSING-处理中，SUCCESS-成功，FAILED-失败",
+      comment: "状态：PROCESSING-处理中，SUCCESS-成功，FAILED-失败，CANCELLED-已取消",
     },
     create_time: {
       type: DataTypes.DATE,
