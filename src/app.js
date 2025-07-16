@@ -42,36 +42,32 @@ app.use(cors({
   credentials: true // 允许携带凭证
 }));
 
-// 修复请求体解析问题 - 先捕获原始请求体
-app.use((req, res, next) => {
-  let data = '';
-  req.on('data', chunk => {
-    data += chunk;
-  });
-  
-  req.on('end', () => {
-    req.rawBody = data;
-    
-    // 如果有内容，记录原始请求体
-    if (data) {
-      logger.info(`捕获到原始请求体: ${data}`);
-    }
-    
-    // 继续处理
-    next();
-  });
-});
+// 使用原生的body-parser，并保存原始请求体
+const bodyParser = require('body-parser');
 
-// 解析 JSON 请求体
-app.use(express.json({
+// 创建原始请求体解析器
+app.use(bodyParser.json({
   limit: '10mb',
-  // 不在这里设置 verify，因为我们已经捕获了原始请求体
+  verify: (req, res, buf) => {
+    req.rawBody = buf.toString();
+    if (req.rawBody) {
+      logger.info(`捕获到原始请求体: ${req.rawBody}`);
+    }
+  }
 }));
 
 // 解析application/x-www-form-urlencoded
-app.use(express.urlencoded({ 
+app.use(bodyParser.urlencoded({
   extended: true,
-  limit: '10mb'
+  limit: '10mb',
+  verify: (req, res, buf) => {
+    if (!req.rawBody) {
+      req.rawBody = buf.toString();
+      if (req.rawBody) {
+        logger.info(`从urlencoded捕获原始请求体: ${req.rawBody}`);
+      }
+    }
+  }
 }));
 
 // 记录所有请求
