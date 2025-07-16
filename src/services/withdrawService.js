@@ -125,6 +125,7 @@ class WithdrawService {
           transferRemark: remark,
           transferSceneId: "1000", // 转账场景ID，1000 为现金营销场景
           userRecvPerception: "活动奖励", // 用户收款感知描述，必须使用微信支付支持的值
+          notifyUrl: process.env.TRANSFER_NOTIFY_URL, // 添加转账回调地址
           
           // 添加转账场景报备信息（必须）
           transferSceneReportInfos: [

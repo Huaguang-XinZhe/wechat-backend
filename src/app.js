@@ -20,6 +20,7 @@ const testRoutes = require("./routes/test"); // 添加测试路由
 const wxDeliveryRoutes = require("./routes/wxDelivery"); // 添加微信物流相关路由
 const ordersRoutes = require("./routes/orders"); // 添加订单相关路由
 const withdrawRoutes = require("./routes/withdraw"); // 添加提现相关路由
+const wechatTransferRoutes = require("./routes/wechatTransfer"); // 添加微信转账相关路由
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -328,6 +329,8 @@ app.use("/api/orders", ordersRoutes);
 app.use("/api/wx-delivery", wxDeliveryRoutes);
 // 添加提现相关路由
 app.use("/api/withdraw", withdrawRoutes);
+// 添加微信转账相关路由
+app.use("/api/wechat-transfer", wechatTransferRoutes);
 
 // 404 处理
 app.use("*", (req, res) => {
