@@ -393,6 +393,93 @@ class WechatPayService extends WechatBaseService {
       return false;
     }
   }
+  
+  /**
+   * 验证微信支付回调签名（适用于商家转账回调）
+   * @param {string} signature 签名值
+   * @param {string} timestamp 时间戳
+   * @param {string} nonce 随机字符串
+   * @param {string} body 请求体
+   * @param {string} serialNo 证书序列号
+   * @returns {Promise<boolean>} 验证结果
+   */
+  async verifySignature(signature, timestamp, nonce, body, serialNo) {
+    try {
+      logger.info("开始验证商家转账回调签名...");
+      
+      // 构建验签名串
+      const message = `${timestamp}\n${nonce}\n${body}\n`;
+      logger.info(`验签名串: ${message.substring(0, 100)}...`);
+      
+      // 检查是否为签名探测流量
+      if (signature && signature.startsWith('WECHATPAY/SIGNTEST/')) {
+        logger.info("检测到签名探测流量，直接返回成功");
+        return true;
+      }
+      
+      // 在生产环境中验证签名
+      if (process.env.NODE_ENV === 'production') {
+        logger.info(`使用证书序列号: ${serialNo}`);
+        
+        try {
+          // 获取对应的微信支付平台证书
+          // 实际项目中应该从证书管理器获取对应序列号的证书
+          const publicKey = this.getWechatPayPublicKey(serialNo);
+          
+          if (!publicKey) {
+            logger.error(`未找到序列号为 ${serialNo} 的微信支付平台证书`);
+            return false;
+          }
+          
+          // 使用公钥验证签名
+          const verify = crypto.createVerify('RSA-SHA256');
+          verify.update(message);
+          const result = verify.verify(publicKey, signature, 'base64');
+          
+          logger.info(`签名验证结果: ${result ? '成功' : '失败'}`);
+          return result;
+        } catch (verifyError) {
+          logger.error("验证签名时发生错误:", verifyError);
+          return false;
+        }
+      } else {
+        // 开发环境下跳过验证
+        logger.info("开发环境下跳过签名验证，直接返回成功");
+        return true;
+      }
+    } catch (error) {
+      logger.error("验证商家转账回调签名失败:", error);
+      logger.error("错误堆栈:", error.stack);
+      return false;
+    }
+  }
+  
+  /**
+   * 获取微信支付平台证书
+   * @param {string} serialNo 证书序列号
+   * @returns {string|null} 证书公钥
+   */
+  getWechatPayPublicKey(serialNo) {
+    try {
+      // 实际项目中应该实现证书管理逻辑，定期从微信支付平台获取并缓存证书
+      // 这里简化处理，使用环境变量中配置的证书
+      
+      // 检查是否为公钥ID格式
+      if (serialNo && serialNo.startsWith('PUB_KEY_ID_')) {
+        logger.info(`检测到公钥ID格式: ${serialNo}`);
+        // 使用配置的公钥
+        return process.env.WECHAT_PAY_PUBLIC_KEY || null;
+      }
+      
+      // 否则使用平台证书
+      // 实际项目中应该根据序列号获取对应的证书
+      logger.info(`使用平台证书: ${serialNo}`);
+      return this.certificate || null;
+    } catch (error) {
+      logger.error("获取微信支付平台证书失败:", error);
+      return null;
+    }
+  }
 }
 
 module.exports = new WechatPayService(); 

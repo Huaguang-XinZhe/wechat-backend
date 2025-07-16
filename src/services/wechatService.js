@@ -94,6 +94,19 @@ class WechatService {
     return this.payService.verifyNotifySignature(timestamp, nonce, body, signature);
   }
 
+  /**
+   * 验证微信支付回调签名（适用于商家转账回调）
+   * @param {string} signature 签名值
+   * @param {string} timestamp 时间戳
+   * @param {string} nonce 随机字符串
+   * @param {string} body 请求体
+   * @param {string} serialNo 证书序列号
+   * @returns {Promise<boolean>} 验证结果
+   */
+  async verifySignature(signature, timestamp, nonce, body, serialNo) {
+    return this.payService.verifySignature(signature, timestamp, nonce, body, serialNo);
+  }
+
   // ===== 物流服务 =====
   
   /**

@@ -128,13 +128,22 @@ router.get("/query/:billNo", authMiddleware, async (req, res, next) => {
 });
 
 // 微信转账回调通知 - 不需要身份验证
-router.post("/transfer/notify", (req, res) => {
+router.post("/transfer/notify", async (req, res) => {
   try {
     const ip = req.headers['x-real-ip'] || req.ip;
     const requestId = `notify-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
     
     logger.info(`=== 微信转账回调开始处理 [${requestId}] - ${ip} ===`);
     logger.info(`请求头 [${requestId}]: ${JSON.stringify(req.headers)}`);
+    
+    // 验证签名 - 从请求头获取签名信息
+    const wechatpaySerial = req.headers['wechatpay-serial'];
+    const wechatpaySignature = req.headers['wechatpay-signature'];
+    const wechatpayTimestamp = req.headers['wechatpay-timestamp'];
+    const wechatpayNonce = req.headers['wechatpay-nonce'];
+    
+    // 记录签名信息
+    logger.info(`签名信息 [${requestId}]: Serial=${wechatpaySerial}, Timestamp=${wechatpayTimestamp}, Nonce=${wechatpayNonce}`);
     
     // 获取原始JSON数据
     let jsonData = "";
@@ -154,16 +163,46 @@ router.post("/transfer/notify", (req, res) => {
         try {
           notifyData = JSON.parse(jsonData);
           logger.info(`解析JSON数据成功 [${requestId}]`);
+          
+          // 验证签名 - 如果有签名信息则进行验证
+          if (wechatpaySignature && wechatpayTimestamp && wechatpayNonce) {
+            try {
+              const wechatService = require("../services/wechatService");
+              const isSignValid = await wechatService.verifySignature(
+                wechatpaySignature,
+                wechatpayTimestamp,
+                wechatpayNonce,
+                jsonData,
+                wechatpaySerial
+              );
+              
+              if (!isSignValid) {
+                logger.error(`签名验证失败 [${requestId}]`);
+                // 签名验证失败时，按照文档要求返回4XX状态码
+                return res.status(400).json({ code: "FAIL", message: "签名验证失败" });
+              }
+              
+              logger.info(`签名验证成功 [${requestId}]`);
+            } catch (signError) {
+              logger.error(`签名验证异常 [${requestId}]: ${signError.message}`);
+              // 签名验证异常时，按照文档要求返回4XX状态码
+              return res.status(400).json({ code: "FAIL", message: "签名验证异常" });
+            }
+          } else {
+            logger.warn(`未提供完整的签名信息 [${requestId}]，跳过签名验证`);
+          }
         } catch (parseError) {
           logger.error(`解析JSON数据失败 [${requestId}]: ${parseError.message}`);
           return res.json({ code: "SUCCESS", message: "OK" }); // 告知微信我们已收到通知
         }
         
-        // 尝试从回调数据或嵌套资源中提取转账单号
+        // 尝试从回调数据或嵌套资源中提取转账单号和状态
         let outBillNo = null;
-        let transferDetail = notifyData;
+        let transferBillNo = null;
+        let state = null;
+        let transferDetail = null;
         
-        // 如果存在加密资源，尝试获取原始类型
+        // 如果存在加密资源，尝试解密
         if (notifyData.resource) {
           logger.info(`回调包含resource字段 [${requestId}]: ${JSON.stringify(notifyData.resource)}`);
           
@@ -178,10 +217,21 @@ router.post("/transfer/notify", (req, res) => {
                 logger.info(`资源解密成功 [${requestId}]: ${JSON.stringify(decryptedData)}`);
                 transferDetail = decryptedData;
                 
-                // 从解密数据中提取单号
+                // 从解密数据中提取信息 - 注意字段名是 out_bill_no 和 state
                 if (decryptedData.out_bill_no) {
                   outBillNo = decryptedData.out_bill_no;
                   logger.info(`从解密数据中提取到单号 [${requestId}]: ${outBillNo}`);
+                }
+                
+                if (decryptedData.transfer_bill_no) {
+                  transferBillNo = decryptedData.transfer_bill_no;
+                  logger.info(`从解密数据中提取到微信单号 [${requestId}]: ${transferBillNo}`);
+                }
+                
+                // 根据文档，状态字段名是 state 而不是 status
+                if (decryptedData.state) {
+                  state = decryptedData.state;
+                  logger.info(`从解密数据中提取到状态 [${requestId}]: ${state}`);
                 }
               }
             } catch (decryptError) {
@@ -206,17 +256,27 @@ router.post("/transfer/notify", (req, res) => {
           logger.info(`尝试从summary中提取信息 [${requestId}]: ${notifyData.summary}`);
         }
         
-        // 获取处理结果状态
-        let status = transferDetail.status || notifyData.status || 'SUCCESS';
-        logger.info(`转账状态 [${requestId}]: ${status}`);
+        // 获取处理结果状态 - 优先使用解密后的state字段
+        if (!state) {
+          state = notifyData.state || 'SUCCESS';
+          logger.info(`使用原始数据中的状态 [${requestId}]: ${state}`);
+        }
         
         // 如果没找到单号，查找处理中的提现记录
         if (!outBillNo) {
           logger.info(`未从回调数据中找到转账单号 [${requestId}]，将尝试更新最近的处理中记录`);
-          await this._handleLatestProcessingRecord(requestId, status);
+          await router.post("/transfer/notify")._handleLatestProcessingRecord(requestId, state);
         } else {
           // 找到了单号，实现幂等处理
-          await this._handleWithdrawRecordWithBillNo(requestId, outBillNo, status, transferDetail);
+          await router.post("/transfer/notify")._handleWithdrawRecordWithBillNo(
+            requestId, 
+            outBillNo, 
+            state, 
+            {
+              transfer_bill_no: transferBillNo,
+              ...transferDetail
+            }
+          );
         }
         
         // 返回成功响应给微信
@@ -235,7 +295,7 @@ router.post("/transfer/notify", (req, res) => {
 });
 
 // 处理最近的处理中提现记录
-router.post("/transfer/notify")._handleLatestProcessingRecord = async function(requestId, status) {
+router.post("/transfer/notify")._handleLatestProcessingRecord = async function(requestId, state) {
   try {
     // 查询对应的提现记录
     const { WxWithdrawRecord } = require("../models/withdrawModel");
@@ -250,7 +310,7 @@ router.post("/transfer/notify")._handleLatestProcessingRecord = async function(r
       logger.info(`找到最近的处理中记录 [${requestId}]: ID=${latestRecord.id}, 单号=${latestRecord.out_bill_no}`);
       
       // 幂等处理 - 更新为成功状态
-      if (status.toUpperCase().includes('SUCCESS')) {
+      if (state.toUpperCase() === 'SUCCESS') {
         // 更新状态，使用事务确保原子性
         await WxWithdrawRecord.update(
           {
@@ -268,6 +328,23 @@ router.post("/transfer/notify")._handleLatestProcessingRecord = async function(r
         // 再次查询确认状态已更新
         const updatedRecord = await WxWithdrawRecord.findByPk(latestRecord.id);
         logger.info(`提现记录更新结果 [${requestId}]: ID=${updatedRecord.id}, 状态=${updatedRecord.status}`);
+      } else if (state.toUpperCase() === 'FAIL') {
+        // 处理失败状态
+        await WxWithdrawRecord.update(
+          {
+            status: 'FAILED',
+            transfer_bill_no: `AUTO_FAIL_${Date.now()}`
+          },
+          {
+            where: {
+              id: latestRecord.id,
+              status: 'PROCESSING'
+            }
+          }
+        );
+        
+        const updatedRecord = await WxWithdrawRecord.findByPk(latestRecord.id);
+        logger.info(`提现记录更新为失败 [${requestId}]: ID=${updatedRecord.id}, 状态=${updatedRecord.status}`);
       }
     } else {
       logger.warn(`未找到处理中的提现记录 [${requestId}]`);
@@ -278,9 +355,9 @@ router.post("/transfer/notify")._handleLatestProcessingRecord = async function(r
 };
 
 // 根据单号处理提现记录（幂等处理）
-router.post("/transfer/notify")._handleWithdrawRecordWithBillNo = async function(requestId, outBillNo, status, transferDetail) {
+router.post("/transfer/notify")._handleWithdrawRecordWithBillNo = async function(requestId, outBillNo, state, transferDetail) {
   try {
-    logger.info(`处理指定单号的提现记录 [${requestId}]: ${outBillNo}, 状态=${status}`);
+    logger.info(`处理指定单号的提现记录 [${requestId}]: ${outBillNo}, 状态=${state}`);
     
     // 查询对应的提现记录
     const { WxWithdrawRecord } = require("../models/withdrawModel");
@@ -295,9 +372,10 @@ router.post("/transfer/notify")._handleWithdrawRecordWithBillNo = async function
       if (withdrawRecord.status === 'PROCESSING') {
         let newStatus = withdrawRecord.status;
         
-        if (status.toUpperCase().includes('SUCCESS')) {
+        // 根据微信支付文档中的状态映射到我们系统的状态
+        if (state.toUpperCase() === 'SUCCESS') {
           newStatus = 'SUCCESS';
-        } else if (status.toUpperCase().includes('FAIL') || status.toUpperCase().includes('ERROR')) {
+        } else if (state.toUpperCase() === 'FAIL' || state.toUpperCase() === 'CANCELLED') {
           newStatus = 'FAILED';
         }
         
@@ -306,7 +384,7 @@ router.post("/transfer/notify")._handleWithdrawRecordWithBillNo = async function
           const [updatedCount] = await WxWithdrawRecord.update(
             {
               status: newStatus,
-              transfer_bill_no: transferDetail.transfer_bill_no || transferDetail.transaction_id || `NOTIFY_${Date.now()}`
+              transfer_bill_no: transferDetail.transfer_bill_no || `NOTIFY_${Date.now()}`
             },
             {
               where: {
