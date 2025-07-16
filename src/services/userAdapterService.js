@@ -615,6 +615,14 @@ class UserAdapterService {
               availableCommission = effectiveOrderAmount * commissionRate;
               
               logger.info(`用户${userId}提现计算: 总订单金额=${totalOrderAmount}, 已提现订单金额=${withdrawnOrderTotal}, 有效订单金额=${effectiveOrderAmount}, 分成比例=${commissionRate}, 可提现金额=${availableCommission}`);
+              
+              // 检查是否启用测试模式提现
+              const testWithdrawMode = process.env.TEST_WITHDRAW_MODE === 'true';
+              if (testWithdrawMode && availableCommission > 0) {
+                const testAmount = parseFloat(process.env.TEST_WITHDRAW_AMOUNT || 0.1);
+                logger.info(`用户${userId}启用测试模式提现，使用测试金额: ${testAmount}`);
+                availableCommission = testAmount;
+              }
             }
           }
         } catch (error) {
