@@ -51,7 +51,7 @@ class WithdrawService {
    * @returns {Promise<Object>} 提现结果
    */
   async requestWithdraw(user, options = {}) {
-    const { amount, remark = "邀请奖励提现" } = options;
+    const { amount, remark = "邀请奖励提现", is_partial = false } = options;
     
     try {
       // 获取用户提现信息
@@ -156,7 +156,8 @@ class WithdrawService {
           amount: 0.1, // 固定返回0.1元
           status: "PROCESSING", // 状态保持为处理中，等待回调更新
           createTime: withdrawRecord.create_time,
-          package_info: transferResult.package_info || null
+          package_info: transferResult.package_info || null,
+          is_partial: is_partial // 返回部分提现标志，用于前端逻辑
         };
       } catch (transferError) {
         // 更新提现记录为失败

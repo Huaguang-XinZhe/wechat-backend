@@ -84,6 +84,7 @@ const withdrawRequestSchema = Joi.object({
   amount: Joi.number().positive().precision(2).optional(),
   transfer_remark: Joi.string().default("邀请奖励提现"),
   remark: Joi.string().allow("").optional(),
+  is_partial: Joi.boolean().optional() // 添加部分提现标志，仅用于内部逻辑，不传递给微信API
 });
 
 // 生成提现单号

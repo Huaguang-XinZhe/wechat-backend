@@ -38,13 +38,14 @@ router.post("/request", authMiddleware, async (req, res, next) => {
     }
     
     const user = req.user;
-    const { amount, transfer_remark } = value;
+    const { amount, transfer_remark, is_partial } = value;
     
     try {
       // 调用提现服务
       const withdrawResult = await withdrawService.requestWithdraw(user, {
         amount,
-        remark: transfer_remark || "邀请好友奖励活动"
+        remark: transfer_remark || "邀请好友奖励活动",
+        is_partial // 传递部分提现标志，但不会传递给微信API
       });
       
       res.json({
