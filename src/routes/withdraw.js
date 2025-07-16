@@ -44,7 +44,7 @@ router.post("/request", authMiddleware, async (req, res, next) => {
       // 调用提现服务
       const withdrawResult = await withdrawService.requestWithdraw(user, {
         amount,
-        remark: transfer_remark
+        remark: transfer_remark || "邀请好友奖励活动"
       });
       
       res.json({
