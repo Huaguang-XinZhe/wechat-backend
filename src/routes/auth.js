@@ -140,6 +140,12 @@ router.post("/login", async (req, res, next) => {
 // 手机号登录
 router.post("/phoneLogin", async (req, res, next) => {
   try {
+    // 添加详细的请求体日志
+    logger.info(`手机号登录请求体原始内容: ${JSON.stringify(req.body)}`);
+    logger.info(`请求头信息: ${JSON.stringify(req.headers)}`);
+    logger.info(`请求方法: ${req.method}`);
+    logger.info(`请求URL: ${req.url}`);
+    
     const { code, encryptedData, iv, inviteCode } = req.body;
 
     logger.info(
