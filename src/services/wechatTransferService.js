@@ -99,23 +99,16 @@ class WechatTransferService {
         openid,
         userName = "", // 可选，收款人姓名（加密）
         transferRemark = "商家转账",
-        transferSceneId = "1000", // 转账场景ID
+        transferSceneId = "1000", // 转场景ID
         transferSceneReportInfos = [], // 添加场景报备信息参数
         userRecvPerception = "活动奖励", // 用户收款感知描述，默认使用"活动奖励"
         notifyUrl,
-        testMode = false, // 新增测试模式参数
       } = transferData;
 
       // 调试日志：输出转账金额
       logger.info(
         `转账金额(分): ${transferAmount}, 类型: ${typeof transferAmount}`
       );
-
-      // 如果明确要求使用测试模式，则直接返回模拟结果
-      if (testMode === true) {
-        logger.info("前端请求使用测试模式，返回模拟转账结果");
-        return this.generateMockTransferResult(outBillNo, transferAmount);
-      }
 
       // 检查是否为测试环境（缺少必要配置）
       if (this.isTestMode()) {
@@ -213,15 +206,6 @@ class WechatTransferService {
       if (error.response) {
         logger.error(`微信转账API响应错误: 状态码 ${error.response.status}`);
         logger.error(`错误详情: ${JSON.stringify(error.response.data)}`);
-      }
-
-      // 如果前端明确要求使用测试模式，则使用模拟结果
-      if (transferData.testMode === true) {
-        logger.warn("前端请求使用测试模式，返回模拟转账结果");
-        return this.generateMockTransferResult(
-          transferData.outBillNo,
-          transferData.transferAmount
-        );
       }
 
       // 不再自动降级，直接抛出异常

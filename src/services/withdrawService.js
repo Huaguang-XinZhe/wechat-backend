@@ -51,7 +51,7 @@ class WithdrawService {
    * @returns {Promise<Object>} 提现结果
    */
   async requestWithdraw(user, options = {}) {
-    const { testMode = false, remark = "邀请奖励提现" } = options;
+    const { remark = "邀请奖励提现" } = options;
     
     try {
       // 获取用户提现信息
@@ -112,7 +112,6 @@ class WithdrawService {
           transferRemark: remark,
           transferSceneId: "1000", // 转账场景ID，1000 为现金营销场景
           userRecvPerception: "邀请奖励", // 用户收款感知描述
-          testMode: testMode, // 测试模式参数
           
           // 添加转账场景报备信息
           transferSceneReportInfos: [
@@ -144,7 +143,6 @@ class WithdrawService {
           amount: availableAmount.toFixed(2),
           status: "SUCCESS",
           createTime: withdrawRecord.create_time,
-          mock: transferResult.mock || false,
           packageInfo: transferResult.package_info || null
         };
       } catch (transferError) {
