@@ -142,154 +142,163 @@ router.post("/transfer/notify", async (req, res) => {
     const wechatpayTimestamp = req.headers['wechatpay-timestamp'];
     const wechatpayNonce = req.headers['wechatpay-nonce'];
     
-    // 记录签名信息
     logger.info(`签名信息 [${requestId}]: Serial=${wechatpaySerial}, Timestamp=${wechatpayTimestamp}, Nonce=${wechatpayNonce}`);
     
-    // 获取原始JSON数据
-    let jsonData = "";
+    // 直接处理请求体，不使用事件监听方式
+    let jsonData = '';
     
-    req.on("data", (chunk) => {
-      jsonData += chunk;
-    });
+    // 如果请求体已经是JSON对象（express可能已经解析）
+    if (req.body && typeof req.body === 'object') {
+      jsonData = JSON.stringify(req.body);
+      logger.info(`请求体已被解析为对象 [${requestId}]`);
+    } 
+    // 如果请求体是字符串
+    else if (req.body && typeof req.body === 'string') {
+      jsonData = req.body;
+      logger.info(`请求体是字符串 [${requestId}]`);
+    }
+    // 如果请求体为空，尝试使用原始请求体
+    else if (req.rawBody) {
+      jsonData = req.rawBody;
+      logger.info(`使用原始请求体 [${requestId}]`);
+    }
+    // 如果以上都没有，记录错误
+    else {
+      logger.error(`无法获取请求体 [${requestId}]`);
+      return res.json({ code: "SUCCESS", message: "OK" }); // 告知微信我们已收到通知
+    }
     
-    req.on("end", async () => {
-      try {
-        logger.info(`完整JSON数据长度 [${requestId}]: ${jsonData.length}`);
-        // 完整记录回调数据，便于排查问题（生产环境可考虑脱敏）
-        logger.info(`回调原始数据 [${requestId}]: ${jsonData}`);
-        
-        // 解析JSON数据
-        let notifyData;
+    logger.info(`完整JSON数据长度 [${requestId}]: ${jsonData.length}`);
+    // 完整记录回调数据，便于排查问题（生产环境可考虑脱敏）
+    logger.info(`回调原始数据 [${requestId}]: ${jsonData}`);
+    
+    // 解析JSON数据
+    let notifyData;
+    try {
+      notifyData = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
+      logger.info(`解析JSON数据成功 [${requestId}]`);
+      
+      // 验证签名 - 如果有签名信息则进行验证
+      if (wechatpaySignature && wechatpayTimestamp && wechatpayNonce) {
         try {
-          notifyData = JSON.parse(jsonData);
-          logger.info(`解析JSON数据成功 [${requestId}]`);
-          
-          // 验证签名 - 如果有签名信息则进行验证
-          if (wechatpaySignature && wechatpayTimestamp && wechatpayNonce) {
-            try {
-              const wechatService = require("../services/wechatService");
-              const isSignValid = await wechatService.verifySignature(
-                wechatpaySignature,
-                wechatpayTimestamp,
-                wechatpayNonce,
-                jsonData,
-                wechatpaySerial
-              );
-              
-              if (!isSignValid) {
-                logger.error(`签名验证失败 [${requestId}]`);
-                // 签名验证失败时，按照文档要求返回4XX状态码
-                return res.status(400).json({ code: "FAIL", message: "签名验证失败" });
-              }
-              
-              logger.info(`签名验证成功 [${requestId}]`);
-            } catch (signError) {
-              logger.error(`签名验证异常 [${requestId}]: ${signError.message}`);
-              // 签名验证异常时，按照文档要求返回4XX状态码
-              return res.status(400).json({ code: "FAIL", message: "签名验证异常" });
-            }
-          } else {
-            logger.warn(`未提供完整的签名信息 [${requestId}]，跳过签名验证`);
-          }
-        } catch (parseError) {
-          logger.error(`解析JSON数据失败 [${requestId}]: ${parseError.message}`);
-          return res.json({ code: "SUCCESS", message: "OK" }); // 告知微信我们已收到通知
-        }
-        
-        // 尝试从回调数据或嵌套资源中提取转账单号和状态
-        let outBillNo = null;
-        let transferBillNo = null;
-        let state = null;
-        let transferDetail = null;
-        
-        // 如果存在加密资源，尝试解密
-        if (notifyData.resource) {
-          logger.info(`回调包含resource字段 [${requestId}]: ${JSON.stringify(notifyData.resource)}`);
-          
-          // 如果有解密后的数据（resource.ciphertext），尝试解析
-          if (notifyData.resource.ciphertext && notifyData.resource.associated_data && notifyData.resource.nonce) {
-            try {
-              // 尝试解密资源数据
-              const wechatService = require("../services/wechatService");
-              const decryptedData = wechatService.decryptResource(notifyData.resource);
-              
-              if (decryptedData) {
-                logger.info(`资源解密成功 [${requestId}]: ${JSON.stringify(decryptedData)}`);
-                transferDetail = decryptedData;
-                
-                // 从解密数据中提取信息 - 注意字段名是 out_bill_no 和 state
-                if (decryptedData.out_bill_no) {
-                  outBillNo = decryptedData.out_bill_no;
-                  logger.info(`从解密数据中提取到单号 [${requestId}]: ${outBillNo}`);
-                }
-                
-                if (decryptedData.transfer_bill_no) {
-                  transferBillNo = decryptedData.transfer_bill_no;
-                  logger.info(`从解密数据中提取到微信单号 [${requestId}]: ${transferBillNo}`);
-                }
-                
-                // 根据文档，状态字段名是 state 而不是 status
-                if (decryptedData.state) {
-                  state = decryptedData.state;
-                  logger.info(`从解密数据中提取到状态 [${requestId}]: ${state}`);
-                }
-              }
-            } catch (decryptError) {
-              logger.error(`资源解密失败 [${requestId}]: ${decryptError.message}`);
-            }
-          }
-        }
-        
-        // 如果解密后仍未获取到单号，尝试从原始数据中提取
-        if (!outBillNo) {
-          if (notifyData.out_bill_no) {
-            outBillNo = notifyData.out_bill_no;
-            logger.info(`从原始数据中提取到单号 [${requestId}]: ${outBillNo}`);
-          } else if (notifyData.id) {
-            outBillNo = notifyData.id;
-            logger.info(`使用通知ID作为单号 [${requestId}]: ${outBillNo}`);
-          }
-        }
-        
-        // 如果依然没有找到单号，但有对应的业务ID
-        if (!outBillNo && notifyData.summary) {
-          logger.info(`尝试从summary中提取信息 [${requestId}]: ${notifyData.summary}`);
-        }
-        
-        // 获取处理结果状态 - 优先使用解密后的state字段
-        if (!state) {
-          state = notifyData.state || 'SUCCESS';
-          logger.info(`使用原始数据中的状态 [${requestId}]: ${state}`);
-        }
-        
-        // 如果没找到单号，查找处理中的提现记录
-        if (!outBillNo) {
-          logger.info(`未从回调数据中找到转账单号 [${requestId}]，将尝试更新最近的处理中记录`);
-          await router.post("/transfer/notify")._handleLatestProcessingRecord(requestId, state);
-        } else {
-          // 找到了单号，实现幂等处理
-          await router.post("/transfer/notify")._handleWithdrawRecordWithBillNo(
-            requestId, 
-            outBillNo, 
-            state, 
-            {
-              transfer_bill_no: transferBillNo,
-              ...transferDetail
-            }
+          const wechatService = require("../services/wechatService");
+          const isSignValid = await wechatService.verifySignature(
+            wechatpaySignature,
+            wechatpayTimestamp,
+            wechatpayNonce,
+            typeof jsonData === 'string' ? jsonData : JSON.stringify(jsonData),
+            wechatpaySerial
           );
+          
+          if (!isSignValid) {
+            logger.error(`签名验证失败 [${requestId}]`);
+            // 签名验证失败时，按照文档要求返回4XX状态码
+            return res.status(400).json({ code: "FAIL", message: "签名验证失败" });
+          }
+          
+          logger.info(`签名验证成功 [${requestId}]`);
+        } catch (signError) {
+          logger.error(`签名验证异常 [${requestId}]: ${signError.message}`);
+          // 签名验证异常时，按照文档要求返回4XX状态码
+          return res.status(400).json({ code: "FAIL", message: "签名验证异常" });
         }
-        
-        // 返回成功响应给微信
-        logger.info(`转账回调处理完成 [${requestId}]，返回成功`);
-        return res.json({ code: "SUCCESS", message: "OK" });
-      } catch (error) {
-        logger.error(`处理微信转账回调失败 [${requestId}]: ${error.message}`);
-        // 即使出错也返回成功，避免微信重复回调
-        return res.json({ code: "SUCCESS", message: "OK" });
+      } else {
+        logger.warn(`未提供完整的签名信息 [${requestId}]，跳过签名验证`);
       }
-    });
+    } catch (parseError) {
+      logger.error(`解析JSON数据失败 [${requestId}]: ${parseError.message}`);
+      return res.json({ code: "SUCCESS", message: "OK" }); // 告知微信我们已收到通知
+    }
+    
+    // 尝试从回调数据或嵌套资源中提取转账单号和状态
+    let outBillNo = null;
+    let transferBillNo = null;
+    let state = null;
+    let transferDetail = null;
+    
+    // 如果存在加密资源，尝试解密
+    if (notifyData.resource) {
+      logger.info(`回调包含resource字段 [${requestId}]: ${JSON.stringify(notifyData.resource)}`);
+      
+      // 如果有解密后的数据（resource.ciphertext），尝试解析
+      if (notifyData.resource.ciphertext && notifyData.resource.associated_data && notifyData.resource.nonce) {
+        try {
+          // 尝试解密资源数据
+          const wechatService = require("../services/wechatService");
+          const decryptedData = wechatService.decryptResource(notifyData.resource);
+          
+          if (decryptedData) {
+            logger.info(`资源解密成功 [${requestId}]: ${JSON.stringify(decryptedData)}`);
+            transferDetail = decryptedData;
+            
+            // 从解密数据中提取信息 - 注意字段名是 out_bill_no 和 state
+            if (decryptedData.out_bill_no) {
+              outBillNo = decryptedData.out_bill_no;
+              logger.info(`从解密数据中提取到单号 [${requestId}]: ${outBillNo}`);
+            }
+            
+            if (decryptedData.transfer_bill_no) {
+              transferBillNo = decryptedData.transfer_bill_no;
+              logger.info(`从解密数据中提取到微信单号 [${requestId}]: ${transferBillNo}`);
+            }
+            
+            // 根据文档，状态字段名是 state 而不是 status
+            if (decryptedData.state) {
+              state = decryptedData.state;
+              logger.info(`从解密数据中提取到状态 [${requestId}]: ${state}`);
+            }
+          }
+        } catch (decryptError) {
+          logger.error(`资源解密失败 [${requestId}]: ${decryptError.message}`);
+        }
+      }
+    }
+    
+    // 如果解密后仍未获取到单号，尝试从原始数据中提取
+    if (!outBillNo) {
+      if (notifyData.out_bill_no) {
+        outBillNo = notifyData.out_bill_no;
+        logger.info(`从原始数据中提取到单号 [${requestId}]: ${outBillNo}`);
+      } else if (notifyData.id) {
+        outBillNo = notifyData.id;
+        logger.info(`使用通知ID作为单号 [${requestId}]: ${outBillNo}`);
+      }
+    }
+    
+    // 如果依然没有找到单号，但有对应的业务ID
+    if (!outBillNo && notifyData.summary) {
+      logger.info(`尝试从summary中提取信息 [${requestId}]: ${notifyData.summary}`);
+    }
+    
+    // 获取处理结果状态 - 优先使用解密后的state字段
+    if (!state) {
+      state = notifyData.state || 'SUCCESS';
+      logger.info(`使用原始数据中的状态 [${requestId}]: ${state}`);
+    }
+    
+    // 如果没找到单号，查找处理中的提现记录
+    if (!outBillNo) {
+      logger.info(`未从回调数据中找到转账单号 [${requestId}]，将尝试更新最近的处理中记录`);
+      await router.post("/transfer/notify")._handleLatestProcessingRecord(requestId, state);
+    } else {
+      // 找到了单号，实现幂等处理
+      await router.post("/transfer/notify")._handleWithdrawRecordWithBillNo(
+        requestId, 
+        outBillNo, 
+        state, 
+        {
+          transfer_bill_no: transferBillNo,
+          ...transferDetail
+        }
+      );
+    }
+    
+    // 返回成功响应给微信
+    logger.info(`转账回调处理完成 [${requestId}]，返回成功`);
+    return res.json({ code: "SUCCESS", message: "OK" });
   } catch (error) {
-    logger.error(`微信转账回调处理异常: ${error.message}`);
+    logger.error(`处理微信转账回调失败: ${error.message}`);
+    // 即使出错也返回成功，避免微信重复回调
     return res.json({ code: "SUCCESS", message: "OK" });
   }
 });

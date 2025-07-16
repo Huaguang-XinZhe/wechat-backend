@@ -99,8 +99,21 @@ app.use("/api/", limiter);
 
 // 条件性解析请求体 - 跳过微信支付回调路径，避免 XML 数据被预先解析
 app.use((req, res, next) => {
-  // 跳过微信支付回调路径的 body parsing
-  if (req.url.includes('/payment/notify')) {
+  // 捕获原始请求体
+  let rawBody = '';
+  req.on('data', chunk => {
+    rawBody += chunk.toString();
+  });
+  
+  req.on('end', () => {
+    req.rawBody = rawBody;
+    next();
+  });
+});
+
+app.use((req, res, next) => {
+  // 跳过微信支付回调和微信转账回调路径的 body parsing
+  if (req.url.includes('/payment/notify') || req.url.includes('/transfer/notify')) {
     return next();
   }
   
