@@ -140,229 +140,266 @@ router.post("/login", async (req, res, next) => {
 // 手机号登录
 router.post("/phoneLogin", async (req, res, next) => {
   try {
-    // 添加详细的请求体日志
-    logger.info(`手机号登录请求体原始内容: ${JSON.stringify(req.body)}`);
-    logger.info(`请求头信息: ${JSON.stringify(req.headers)}`);
-    logger.info(`请求方法: ${req.method}`);
-    logger.info(`请求URL: ${req.url}`);
-    
-    // 尝试从原始请求体中解析数据
-    let code, encryptedData, iv, inviteCode;
-    let dataSource = "未知";
-    
-    // 1. 尝试从req.body中获取
-    if (req.body && Object.keys(req.body).length > 0) {
-      logger.info("从req.body中获取参数");
-      ({ code, encryptedData, iv, inviteCode } = req.body);
-      dataSource = "req.body";
-    } 
-    // 2. 如果req.body为空或缺少参数，尝试从原始请求体中解析
-    else if (req.rawBody) {
-      logger.info("从req.rawBody中解析参数");
-      try {
-        const parsedBody = JSON.parse(req.rawBody);
-        code = parsedBody.code;
-        encryptedData = parsedBody.encryptedData;
-        iv = parsedBody.iv;
-        inviteCode = parsedBody.inviteCode;
-        dataSource = "req.rawBody";
-      } catch (e) {
-        logger.error("解析原始请求体失败:", e);
+    // 设置请求超时处理
+    const requestTimeout = setTimeout(() => {
+      logger.error('手机号登录请求处理超时（30秒）');
+      if (!res.headersSent) {
+        return res.status(408).json({
+          success: false,
+          message: "请求处理超时，请重试",
+          code: 408,
+        });
       }
-    }
-    // 3. 尝试从查询字符串中获取
-    else if (Object.keys(req.query).length > 0) {
-      logger.info("从req.query中获取参数");
-      ({ code, encryptedData, iv, inviteCode } = req.query);
-      dataSource = "req.query";
-    }
-    
-    // 记录最终获取到的参数
-    logger.info(
-      `手机号登录请求参数(来源:${dataSource}): code=${code}, inviteCode=${
-        inviteCode || "无"
-      }, encryptedData长度=${
-        encryptedData ? encryptedData.length : 0
-      }, iv长度=${iv ? iv.length : 0}`
-    );
-
-    if (!code || !encryptedData || !iv) {
-      return res.status(400).json({
-        success: false,
-        message: "缺少必要参数",
-        code: 400,
-        debug: {
-          receivedBody: req.body,
-          receivedRawBody: req.rawBody ? "有数据" : "无数据",
-          dataSource: dataSource
-        }
-      });
-    }
-
-    // 通过 code 获取微信用户信息
-    logger.info(`开始获取微信用户信息: code=${code}`);
-    const wechatAuth = await wechatService.code2Session(code);
-    if (!wechatAuth || !wechatAuth.openid) {
-      logger.error("获取微信用户信息失败:", wechatAuth);
-      return res.status(400).json({
-        success: false,
-        message: "获取微信用户信息失败",
-        code: 400,
-      });
-    }
-    logger.info(
-      `获取微信用户信息成功: openid=${wechatAuth.openid}, session_key长度=${
-        wechatAuth.session_key ? wechatAuth.session_key.length : 0
-      }`
-    );
+    }, 30000); // 30秒超时
 
     try {
-      logger.info(`开始解密手机号数据...`);
-      const phoneInfo = await wechatService.decryptData(
-        wechatAuth.session_key,
-        encryptedData,
-        iv
+      // 添加详细的请求体日志
+      logger.info(`手机号登录请求体原始内容: ${JSON.stringify(req.body)}`);
+      logger.info(`请求头信息: ${JSON.stringify(req.headers)}`);
+      logger.info(`请求方法: ${req.method}`);
+      logger.info(`请求URL: ${req.url}`);
+      
+      // 尝试从原始请求体中解析数据
+      let code, encryptedData, iv, inviteCode;
+      let dataSource = "未知";
+      
+      // 1. 尝试从req.body中获取
+      if (req.body && Object.keys(req.body).length > 0) {
+        logger.info("从req.body中获取参数");
+        ({ code, encryptedData, iv, inviteCode } = req.body);
+        dataSource = "req.body";
+      } 
+      // 2. 如果req.body为空或缺少参数，尝试从原始请求体中解析
+      else if (req.rawBody) {
+        logger.info("从req.rawBody中解析参数");
+        try {
+          const parsedBody = JSON.parse(req.rawBody);
+          code = parsedBody.code;
+          encryptedData = parsedBody.encryptedData;
+          iv = parsedBody.iv;
+          inviteCode = parsedBody.inviteCode;
+          dataSource = "req.rawBody";
+        } catch (e) {
+          logger.error("解析原始请求体失败:", e);
+        }
+      }
+      // 3. 尝试从查询字符串中获取
+      else if (Object.keys(req.query).length > 0) {
+        logger.info("从req.query中获取参数");
+        ({ code, encryptedData, iv, inviteCode } = req.query);
+        dataSource = "req.query";
+      }
+      
+      // 记录最终获取到的参数
+      logger.info(
+        `手机号登录请求参数(来源:${dataSource}): code=${code}, inviteCode=${
+          inviteCode || "无"
+        }, encryptedData长度=${
+          encryptedData ? encryptedData.length : 0
+        }, iv长度=${iv ? iv.length : 0}`
       );
 
-      logger.info(`手机号解密成功: ${JSON.stringify(phoneInfo, null, 2)}`);
-
-      if (!phoneInfo || !phoneInfo.phoneNumber) {
-        logger.error(
-          `解密成功但未获取到手机号: ${JSON.stringify(phoneInfo, null, 2)}`
-        );
+      if (!code || !encryptedData || !iv) {
+        clearTimeout(requestTimeout);
         return res.status(400).json({
           success: false,
-          message: "获取手机号失败",
+          message: "缺少必要参数",
           code: 400,
+          debug: {
+            receivedBody: req.body,
+            receivedRawBody: req.rawBody ? "有数据" : "无数据",
+            dataSource: dataSource
+          }
         });
       }
 
-      // 根据 openid 查找用户
-      let user = await UserAdapterService.findUserByOpenid(wechatAuth.openid);
+      // 通过 code 获取微信用户信息
+      logger.info(`开始获取微信用户信息: code=${code}`);
+      const wechatAuth = await wechatService.code2Session(code);
+      if (!wechatAuth || !wechatAuth.openid) {
+        clearTimeout(requestTimeout);
+        logger.error("获取微信用户信息失败:", wechatAuth);
+        return res.status(400).json({
+          success: false,
+          message: "获取微信用户信息失败",
+          code: 400,
+        });
+      }
       logger.info(
-        `根据openid查找用户: ${wechatAuth.openid}, 结果: ${
-          user ? "找到用户" : "未找到用户"
+        `获取微信用户信息成功: openid=${wechatAuth.openid}, session_key长度=${
+          wechatAuth.session_key ? wechatAuth.session_key.length : 0
         }`
       );
 
-      if (!user) {
-        // 尝试根据手机号查找用户
-        user = await UserAdapterService.findUserByPhone(phoneInfo.phoneNumber);
-        logger.info(
-          `根据手机号查找用户: ${phoneInfo.phoneNumber}, 结果: ${
-            user ? "找到用户" : "未找到用户"
-          }`
-        );
-      }
-
-      // 如果用户不存在，创建新用户
-      if (!user) {
-        // 新用户，检查是否需要邀请码
-        const requireInviteCode = process.env.REQUIRE_INVITE_CODE === "true";
-        logger.info(
-          `新用户注册, 是否需要邀请码: ${requireInviteCode}, 提供的邀请码: ${
-            inviteCode || "无"
-          }`
+      try {
+        logger.info(`开始解密手机号数据...`);
+        const phoneInfo = await wechatService.decryptData(
+          wechatAuth.session_key,
+          encryptedData,
+          iv
         );
 
-        if (requireInviteCode && !inviteCode) {
-          // 新用户必须提供邀请码才能注册，不能先创建用户
-          logger.info(
-            `新用户注册需要邀请码: openid=${wechatAuth.openid}, phone=${phoneInfo.phoneNumber}`
+        logger.info(`手机号解密成功: ${JSON.stringify(phoneInfo, null, 2)}`);
+
+        if (!phoneInfo || !phoneInfo.phoneNumber) {
+          clearTimeout(requestTimeout);
+          logger.error(
+            `解密成功但未获取到手机号: ${JSON.stringify(phoneInfo, null, 2)}`
           );
           return res.status(400).json({
             success: false,
-            message: "新用户注册需要邀请码",
+            message: "获取手机号失败",
             code: 400,
-            data: {
-              isNewUser: true,
-              needInviteCode: true,
-              openid: wechatAuth.openid,
-              phoneNumber: phoneInfo.phoneNumber,
-            },
           });
         }
 
-        // 验证邀请码（如果提供了的话）
-        let inviteValidation = { valid: true };
-        if (inviteCode) {
-          logger.info(`开始验证邀请码: ${inviteCode}`);
-          inviteValidation = await UserAdapterService.validateInviteCode(
-            inviteCode
+        // 根据 openid 查找用户
+        let user = await UserAdapterService.findUserByOpenid(wechatAuth.openid);
+        logger.info(
+          `根据openid查找用户: ${wechatAuth.openid}, 结果: ${
+            user ? "找到用户" : "未找到用户"
+          }`
+        );
+
+        if (!user) {
+          // 尝试根据手机号查找用户
+          user = await UserAdapterService.findUserByPhone(phoneInfo.phoneNumber);
+          logger.info(
+            `根据手机号查找用户: ${phoneInfo.phoneNumber}, 结果: ${
+              user ? "找到用户" : "未找到用户"
+            }`
           );
-          logger.info(`邀请码验证结果: ${JSON.stringify(inviteValidation)}`);
-          if (!inviteValidation.valid) {
+        }
+
+        // 如果用户不存在，创建新用户
+        if (!user) {
+          // 新用户，检查是否需要邀请码
+          const requireInviteCode = process.env.REQUIRE_INVITE_CODE === "true";
+          logger.info(
+            `新用户注册, 是否需要邀请码: ${requireInviteCode}, 提供的邀请码: ${
+              inviteCode || "无"
+            }`
+          );
+
+          if (requireInviteCode && !inviteCode) {
+            // 新用户必须提供邀请码才能注册，不能先创建用户
+            clearTimeout(requestTimeout);
+            logger.info(
+              `新用户注册需要邀请码: openid=${wechatAuth.openid}, phone=${phoneInfo.phoneNumber}`
+            );
             return res.status(400).json({
               success: false,
-              message:
-                inviteValidation.message ||
-                (inviteValidation.isSystemCode
-                  ? "系统邀请码已被使用"
-                  : "邀请码无效"),
+              message: "新用户注册需要邀请码",
               code: 400,
+              data: {
+                isNewUser: true,
+                needInviteCode: true,
+                openid: wechatAuth.openid,
+                phoneNumber: phoneInfo.phoneNumber,
+              },
+            });
+          }
+
+          // 验证邀请码（如果提供了的话）
+          let inviteValidation = { valid: true };
+          if (inviteCode) {
+            logger.info(`开始验证邀请码: ${inviteCode}`);
+            inviteValidation = await UserAdapterService.validateInviteCode(
+              inviteCode
+            );
+            logger.info(`邀请码验证结果: ${JSON.stringify(inviteValidation)}`);
+            if (!inviteValidation.valid) {
+              clearTimeout(requestTimeout);
+              return res.status(400).json({
+                success: false,
+                message:
+                  inviteValidation.message ||
+                  (inviteValidation.isSystemCode
+                    ? "系统邀请码已被使用"
+                    : "邀请码无效"),
+                code: 400,
+              });
+            }
+          }
+
+          // 创建用户
+          const userData = {
+            openid: wechatAuth.openid,
+            phone_number: phoneInfo.phoneNumber,
+            is_active: true,
+          };
+
+          if (inviteCode) {
+            userData.invite_from = inviteCode;
+          }
+
+          logger.info(`准备创建用户，userData: ${JSON.stringify(userData)}`);
+          user = await UserAdapterService.createOrUpdateUser(userData);
+          logger.info(
+            `用户创建完成，返回的用户信息: invite_from=${user.invite_from}, invite_code=${user.invite_code}`
+          );
+        } else {
+          // 更新用户手机号
+          if (!user.phone_number && phoneInfo.phoneNumber) {
+            user = await user.update({
+              phone_number: phoneInfo.phoneNumber,
             });
           }
         }
 
-        // 创建用户
-        const userData = {
-          openid: wechatAuth.openid,
-          phone_number: phoneInfo.phoneNumber,
-          is_active: true,
-        };
-
-        if (inviteCode) {
-          userData.invite_from = inviteCode;
-        }
-
-        logger.info(`准备创建用户，userData: ${JSON.stringify(userData)}`);
-        user = await UserAdapterService.createOrUpdateUser(userData);
-        logger.info(
-          `用户创建完成，返回的用户信息: invite_from=${user.invite_from}, invite_code=${user.invite_code}`
+        // 使用老后端登录接口获取 token
+        logger.info(`开始调用老后端登录接口: openid=${user.openid}`);
+        const loginResult = await LegacyApiService.login(
+          user.openid,
+          "member123"
         );
-      } else {
-        // 更新用户手机号
-        if (!user.phone_number && phoneInfo.phoneNumber) {
-          user = await user.update({
-            phone_number: phoneInfo.phoneNumber,
+
+        if (!loginResult.success) {
+          clearTimeout(requestTimeout);
+          logger.error("老后端登录失败:", loginResult.message);
+          return res.status(401).json({
+            success: false,
+            message: "登录失败: " + loginResult.message,
+            code: 401,
           });
         }
-      }
+        
+        logger.info(`老后端登录成功，准备返回响应`);
 
-      // 使用老后端登录接口获取 token
-      const loginResult = await LegacyApiService.login(
-        user.openid,
-        "member123"
-      );
-
-      if (!loginResult.success) {
-        logger.error("老后端登录失败:", loginResult.message);
-        return res.status(401).json({
+        // 清除超时计时器
+        clearTimeout(requestTimeout);
+        
+        // 返回登录结果
+        return res.json({
+          success: true,
+          message: "登录成功",
+          data: {
+            token: loginResult.token,
+            tokenHead: loginResult.tokenHead,
+            userInfo: formatUserResponse(user),
+            isNewUser: user.isNewUser || false,
+            inviteCode: user.invite_code,
+            inviteFrom: user.invite_from,
+          },
+        });
+      } catch (error) {
+        clearTimeout(requestTimeout);
+        logger.error("手机号解密失败:", error);
+        return res.status(400).json({
           success: false,
-          message: "登录失败: " + loginResult.message,
-          code: 401,
+          message: "手机号解密失败",
+          code: 400,
+          error: error.message
         });
       }
-
-      // 返回登录结果
-      res.json({
-        success: true,
-        message: "登录成功",
-        data: {
-          token: loginResult.token,
-          tokenHead: loginResult.tokenHead,
-          userInfo: formatUserResponse(user),
-          isNewUser: user.isNewUser || false,
-          inviteCode: user.invite_code,
-          inviteFrom: user.invite_from,
-        },
-      });
-    } catch (error) {
-      logger.error("手机号解密失败:", error);
-      return res.status(400).json({
+    } catch (innerError) {
+      clearTimeout(requestTimeout);
+      logger.error("手机号登录内部处理错误:", innerError);
+      return res.status(500).json({
         success: false,
-        message: "手机号解密失败",
-        code: 400,
+        message: "服务器内部错误",
+        code: 500,
+        error: innerError.message
       });
     }
   } catch (error) {

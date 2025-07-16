@@ -123,8 +123,14 @@ class WechatAuthService extends WechatBaseService {
         };
       }
 
-      // Base64 解码
+      // 设置解密超时保护
+      const decryptTimeout = setTimeout(() => {
+        logger.error("手机号数据解密操作超时（10秒）");
+        throw new Error("解密操作超时，请重试");
+      }, 10000); // 10秒超时
+
       try {
+        // Base64 解码
         logger.info("开始 Base64 解码...");
         const sessionKeyBuffer = Buffer.from(sessionKey, "base64");
         logger.info(
@@ -151,6 +157,7 @@ class WechatAuthService extends WechatBaseService {
 
         // 检查密钥长度是否正确
         if (sessionKeyBuffer.length !== 16) {
+          clearTimeout(decryptTimeout);
           logger.error(
             `会话密钥长度错误，预期16字节，实际${sessionKeyBuffer.length}字节`
           );
@@ -160,6 +167,7 @@ class WechatAuthService extends WechatBaseService {
         }
 
         if (ivBuffer.length !== 16) {
+          clearTimeout(decryptTimeout);
           logger.error(
             `初始向量长度错误，预期16字节，实际${ivBuffer.length}字节`
           );
@@ -189,6 +197,7 @@ class WechatAuthService extends WechatBaseService {
           );
           logger.info("解密器创建成功");
         } catch (cipherError) {
+          clearTimeout(decryptTimeout);
           logger.error(`创建解密器失败: ${cipherError.message}`);
           logger.error(`错误堆栈: ${cipherError.stack}`);
           throw cipherError;
@@ -208,6 +217,7 @@ class WechatAuthService extends WechatBaseService {
 
           decrypted += finalPart;
         } catch (decryptError) {
+          clearTimeout(decryptTimeout);
           logger.error(`解密操作失败: ${decryptError.message}`);
           logger.error(`错误堆栈: ${decryptError.stack}`);
 
@@ -244,6 +254,7 @@ class WechatAuthService extends WechatBaseService {
 
         // 检查解密结果是否为有效的 JSON 格式
         if (!decrypted.startsWith("{") || !decrypted.endsWith("}")) {
+          clearTimeout(decryptTimeout);
           logger.error(
             `解密结果不是有效的 JSON 格式: ${decrypted.substring(0, 100)}...`
           );
@@ -259,6 +270,7 @@ class WechatAuthService extends WechatBaseService {
           );
           logger.info(`手机号信息: ${JSON.stringify(phoneData, null, 2)}`);
         } catch (jsonError) {
+          clearTimeout(decryptTimeout);
           logger.error(`JSON解析失败: ${jsonError.message}`);
           logger.error(`解密后的原始数据: ${decrypted}`);
           throw jsonError;
@@ -268,6 +280,7 @@ class WechatAuthService extends WechatBaseService {
         if (phoneData.watermark) {
           logger.info(`水印信息: ${JSON.stringify(phoneData.watermark)}`);
           if (phoneData.watermark.appid !== this.appId) {
+            clearTimeout(decryptTimeout);
             logger.error(
               `appId 不匹配，期望: ${this.appId}, 实际: ${phoneData.watermark.appid}`
             );
@@ -283,8 +296,12 @@ class WechatAuthService extends WechatBaseService {
           logger.warn("解密数据中没有水印信息");
         }
 
+        // 清除超时计时器
+        clearTimeout(decryptTimeout);
+        
         return phoneData;
       } catch (decryptError) {
+        clearTimeout(decryptTimeout);
         logger.error(`解密过程发生错误: ${decryptError.message}`);
         logger.error(`错误堆栈: ${decryptError.stack}`);
         throw decryptError;
