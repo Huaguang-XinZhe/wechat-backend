@@ -196,7 +196,7 @@ class WechatTransferService {
         billNo: response.data.out_bill_no,
         transferNo: response.data.transfer_bill_no,
         createTime: response.data.create_time,
-        status: response.data.state || "ACCEPTED", // 使用微信实际返回的状态
+        status: "success",
         package_info: response.data.package_info || null, // 添加 package_info 字段
       };
     } catch (error) {
@@ -279,7 +279,7 @@ class WechatTransferService {
       billNo: outBillNo,
       transferNo: `MOCK_TRANSFER_${Date.now()}`,
       createTime: new Date().toISOString(),
-      status: "ACCEPTED", // 使用与微信相同的状态值
+      status: "success",
       mock: true,
       amount: transferAmount / 100, // 转换为元，10分 = 0.1元
       package_info: `MOCK_PACKAGE_${Date.now()}`, // 添加模拟的 package_info
