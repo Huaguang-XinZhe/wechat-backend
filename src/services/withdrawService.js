@@ -143,19 +143,18 @@ class WithdrawService {
         // 调用转账接口
         const transferResult = await wechatTransferService.transferToUser(transferData);
         
-        // 更新提现记录
-        await withdrawRecord.update({
-          status: "SUCCESS",
-          transfer_bill_no: transferResult.transferNo || null
-        });
+        // 重要：不再立即更新提现记录为成功状态
+        // 而是保持PROCESSING状态，等待微信转账回调通知
+        // 这样如果用户关闭收款弹窗，不会误标记为成功
         
+        // 返回结果，包含package_info用于拉起微信收款确认页面
         return {
           success: true,
           withdrawId: withdrawRecord.id,
           billNo: outBillNo,
           transferNo: transferResult.transferNo,
           amount: 0.1, // 固定返回0.1元
-          status: "SUCCESS",
+          status: "PROCESSING", // 状态保持为处理中，等待回调更新
           createTime: withdrawRecord.create_time,
           package_info: transferResult.package_info || null
         };

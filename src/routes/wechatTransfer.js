@@ -128,7 +128,7 @@ router.get("/query/:billNo", authMiddleware, async (req, res, next) => {
 });
 
 // 微信转账回调通知 - 不需要身份验证
-router.post("/notify", (req, res) => {
+router.post("/transfer/notify", (req, res) => {
   try {
     logger.info("=== 微信转账回调开始处理 ===");
     logger.info(`请求头: ${JSON.stringify(req.headers)}`);
@@ -147,7 +147,15 @@ router.post("/notify", (req, res) => {
         logger.info(`JSON数据前100字符: ${jsonData.substring(0, 100)}...`);
         
         // 解析JSON数据
-        const notifyData = JSON.parse(jsonData);
+        let notifyData;
+        try {
+          notifyData = JSON.parse(jsonData);
+          logger.info(`解析JSON数据成功: ${JSON.stringify(notifyData).substring(0, 200)}...`);
+        } catch (parseError) {
+          logger.error(`解析JSON数据失败: ${parseError.message}`);
+          logger.error(`原始数据: ${jsonData}`);
+          return res.json({ code: "SUCCESS", message: "OK" }); // 告知微信我们已收到通知
+        }
         
         // 验证微信支付回调签名
         const timestamp = req.headers["wechatpay-timestamp"];
@@ -181,6 +189,7 @@ router.post("/notify", (req, res) => {
             
             // 直接使用加密前的数据
             transferData = notifyData;
+            logger.info("使用加密前的数据");
           } catch (decryptError) {
             logger.error("解密转账回调数据失败:", decryptError);
             return res.json({ code: "SUCCESS", message: "OK" }); // 返回成功给微信，但记录错误
@@ -199,18 +208,53 @@ router.post("/notify", (req, res) => {
         // 记录转账成功的数据
         logger.info(`转账结果: 单号=${outBillNo}, 状态=${status}`);
         
-        // TODO: 更新数据库中的提现记录
-        // await updateWithdrawRecord(outBillNo, status);
+        try {
+          // 查询对应的提现记录
+          const { WxWithdrawRecord } = require("../models/withdrawModel");
+          const withdrawRecord = await WxWithdrawRecord.findOne({
+            where: { out_bill_no: outBillNo }
+          });
+          
+          if (withdrawRecord) {
+            logger.info(`找到对应的提现记录: ID=${withdrawRecord.id}, 金额=${withdrawRecord.amount}, 当前状态=${withdrawRecord.status}`);
+            
+            // 更新提现记录状态
+            if (status === 'SUCCESS' && withdrawRecord.status !== 'SUCCESS') {
+              logger.info(`更新提现记录状态为成功: ${outBillNo}`);
+              await withdrawRecord.update({
+                status: 'SUCCESS',
+                transfer_bill_no: transferData.transfer_bill_no || transferData.transaction_id || null
+              });
+              logger.info(`提现记录状态更新成功: ${outBillNo}`);
+            } else if (status === 'FAILED' && withdrawRecord.status !== 'FAILED') {
+              logger.info(`更新提现记录状态为失败: ${outBillNo}`);
+              await withdrawRecord.update({
+                status: 'FAILED'
+              });
+              logger.info(`提现记录状态更新成功: ${outBillNo}`);
+            } else {
+              logger.info(`提现记录状态无需更新: 当前=${withdrawRecord.status}, 回调=${status}`);
+            }
+          } else {
+            logger.warn(`未找到对应的提现记录: ${outBillNo}`);
+          }
+        } catch (dbError) {
+          logger.error(`更新提现记录失败: ${dbError.message}`);
+          logger.error(dbError.stack);
+        }
         
         // 返回成功响应给微信
+        logger.info("转账回调处理完成，返回成功");
         return res.json({ code: "SUCCESS", message: "OK" });
       } catch (error) {
-        logger.error("处理微信转账回调失败:", error);
+        logger.error(`处理微信转账回调失败: ${error.message}`);
+        logger.error(error.stack);
         return res.json({ code: "SUCCESS", message: "OK" }); // 告知微信我们已收到通知
       }
     });
   } catch (error) {
-    logger.error("微信转账回调处理异常:", error);
+    logger.error(`微信转账回调处理异常: ${error.message}`);
+    logger.error(error.stack);
     return res.json({ code: "SUCCESS", message: "OK" });
   }
 });
