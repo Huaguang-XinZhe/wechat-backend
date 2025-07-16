@@ -146,8 +146,34 @@ router.post("/phoneLogin", async (req, res, next) => {
     logger.info(`请求方法: ${req.method}`);
     logger.info(`请求URL: ${req.url}`);
     
-    const { code, encryptedData, iv, inviteCode } = req.body;
-
+    // 尝试从原始请求体中解析数据
+    let code, encryptedData, iv, inviteCode;
+    
+    // 1. 尝试从req.body中获取
+    if (req.body && Object.keys(req.body).length > 0) {
+      logger.info("从req.body中获取参数");
+      ({ code, encryptedData, iv, inviteCode } = req.body);
+    } 
+    // 2. 如果req.body为空，尝试从原始请求体中解析
+    else if (req.rawBody) {
+      logger.info("从req.rawBody中解析参数");
+      try {
+        const parsedBody = JSON.parse(req.rawBody);
+        code = parsedBody.code;
+        encryptedData = parsedBody.encryptedData;
+        iv = parsedBody.iv;
+        inviteCode = parsedBody.inviteCode;
+      } catch (e) {
+        logger.error("解析原始请求体失败:", e);
+      }
+    }
+    // 3. 尝试从查询字符串中获取
+    else if (Object.keys(req.query).length > 0) {
+      logger.info("从req.query中获取参数");
+      ({ code, encryptedData, iv, inviteCode } = req.query);
+    }
+    
+    // 记录最终获取到的参数
     logger.info(
       `手机号登录请求参数: code=${code}, inviteCode=${
         inviteCode || "无"
@@ -334,6 +360,22 @@ router.post("/phoneLogin", async (req, res, next) => {
     logger.error("手机号登录失败:", error);
     next(error);
   }
+});
+
+// 添加测试路由，用于测试请求体解析
+router.post("/testRequest", (req, res) => {
+  logger.info("测试请求收到");
+  logger.info(`请求体: ${JSON.stringify(req.body)}`);
+  logger.info(`请求头: ${JSON.stringify(req.headers)}`);
+  logger.info(`原始请求体(如果有): ${req.rawBody || '无'}`);
+  
+  res.json({
+    success: true,
+    message: "测试请求成功",
+    receivedBody: req.body,
+    receivedHeaders: req.headers,
+    receivedRawBody: req.rawBody || null
+  });
 });
 
 // 验证邀请码

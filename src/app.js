@@ -34,43 +34,29 @@ app.set("trust proxy", ["loopback", "linklocal", "uniquelocal"]);
 app.use(helmet()); // 安全头
 app.use(compression()); // 压缩响应
 
-// 更新 CORS 配置以支持真机访问
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      // 允许没有 origin 的请求（如移动应用）
-      if (!origin) return callback(null, true);
+// 添加中间件来捕获原始请求体
+app.use(express.json({ 
+  verify: (req, res, buf) => {
+    req.rawBody = buf.toString();
+    logger.info(`捕获到原始请求体: ${req.rawBody}`);
+  }
+}));
 
-      // 允许的域名列表
-      const allowedOrigins = [
-        "https://servicewechat.com", // 微信小程序
-        "https://127.0.0.1",
-        "https://localhost",
-        "http://127.0.0.1:3000",
-        "http://localhost:3000",
-      ];
+// 配置跨域
+app.use(cors({
+  origin: '*', // 允许所有来源
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
-      // 开发环境允许所有本地 IP 访问
-      if (process.env.NODE_ENV === "development") {
-        if (
-          origin.startsWith("http://192.168.") ||
-          origin.startsWith("http://10.") ||
-          origin.startsWith("http://172.") ||
-          origin.includes("ngrok") // 允许 ngrok 域名
-        ) {
-          return callback(null, true);
-        }
-      }
+// 解析application/x-www-form-urlencoded
+app.use(express.urlencoded({ extended: true }));
 
-      if (allowedOrigins.indexOf(origin) !== -1) {
-        callback(null, true);
-      } else {
-        callback(null, true); // 开发环境暂时允许所有来源
-      }
-    },
-    credentials: true,
-  })
-);
+// 记录所有请求
+app.use((req, res, next) => {
+  logger.info(`${req.method} ${req.path} - ${req.ip}`);
+  next();
+});
 
 // 限流配置
 const limiter = rateLimit({
