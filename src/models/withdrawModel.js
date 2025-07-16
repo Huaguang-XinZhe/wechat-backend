@@ -81,6 +81,8 @@ const WxWithdrawRecord = legacySequelize.define(
 
 // 提现请求验证 schema
 const withdrawRequestSchema = Joi.object({
+  amount: Joi.number().positive().precision(2).optional(),
+  transfer_remark: Joi.string().default("邀请奖励提现"),
   remark: Joi.string().allow("").optional(),
 });
 

@@ -51,16 +51,28 @@ class WithdrawService {
    * @returns {Promise<Object>} 提现结果
    */
   async requestWithdraw(user, options = {}) {
-    const { remark = "邀请奖励提现" } = options;
+    const { amount, remark = "邀请奖励提现" } = options;
     
     try {
       // 获取用户提现信息
       const withdrawInfo = await UserAdapterService.getInviteWithdrawInfo(user.id);
       
+      // 确定提现金额
+      let availableAmount = amount;
+      
+      // 如果没有传入金额，使用用户可提现余额
+      if (!availableAmount) {
+        availableAmount = parseFloat(withdrawInfo.availableCommission);
+      }
+      
       // 检查是否有可提现金额
-      const availableAmount = parseFloat(withdrawInfo.availableCommission);
       if (availableAmount <= 0) {
         throw new Error("没有可提现金额");
+      }
+      
+      // 如果传入的金额大于可提现余额，使用可提现余额
+      if (availableAmount > parseFloat(withdrawInfo.availableCommission)) {
+        availableAmount = parseFloat(withdrawInfo.availableCommission);
       }
       
       // 检查是否已经有进行中的提现申请
@@ -143,7 +155,7 @@ class WithdrawService {
           amount: availableAmount.toFixed(2),
           status: "SUCCESS",
           createTime: withdrawRecord.create_time,
-          packageInfo: transferResult.package_info || null
+          package_info: transferResult.package_info || null
         };
       } catch (transferError) {
         // 更新提现记录为失败

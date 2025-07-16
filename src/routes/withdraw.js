@@ -38,11 +38,13 @@ router.post("/request", authMiddleware, async (req, res, next) => {
     }
     
     const user = req.user;
+    const { amount, transfer_remark } = value;
     
     try {
       // 调用提现服务
       const withdrawResult = await withdrawService.requestWithdraw(user, {
-        remark: value.remark
+        amount,
+        remark: transfer_remark
       });
       
       res.json({
