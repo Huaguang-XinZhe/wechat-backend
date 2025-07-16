@@ -523,19 +523,21 @@ class UserAdapterService {
       // 获取分成比例（从环境变量或配置中获取，默认为30%）
       const commissionRate = parseFloat(process.env.COMMISSION_RATE || 0.3);
       
-      // 获取该用户邀请的所有用户的订单总金额
-      // 这里需要根据实际数据库结构查询订单表
-      // 假设订单表为 oms_order，字段为 member_id（用户ID）和 total_amount（订单总金额）
-      // 并且只计算已确认收货的订单（status = 3）
-      
       let totalOrderAmount = 0;
       let availableCommission = 0;
       let confirmedOrders = [];
       let transactionIds = [];
+      let withdrawnOrderTotal = 0; // 已提现的订单总金额
       
       // 如果有邀请码，才计算提现金额
       if (stats.inviteCode) {
         try {
+          // 获取用户openid
+          const userInfo = await this.getUserInfo(userId);
+          if (!userInfo || !userInfo.openid) {
+            throw new Error("用户未绑定微信账号");
+          }
+          
           // 查询所有被该用户邀请的用户
           const invitedUsers = await UmsMemberWechat.findAll({
             where: { invite_from: stats.inviteCode },
@@ -589,8 +591,27 @@ class UserAdapterService {
                 }
               }
               
-              // 计算可提现金额
-              availableCommission = totalOrderAmount * commissionRate;
+              // 查询已成功提现的记录
+              const [withdrawRecords] = await legacySequelize.query(`
+                SELECT id, amount, order_amount_total, related_order_infos
+                FROM wx_withdraw_record
+                WHERE openid = '${userInfo.openid}'
+                AND status = 'SUCCESS'
+              `);
+              
+              // 计算已提现的订单总金额
+              if (withdrawRecords && withdrawRecords.length > 0) {
+                withdrawnOrderTotal = withdrawRecords.reduce((sum, record) => sum + parseFloat(record.order_amount_total || 0), 0);
+                
+                // 日志记录已提现金额
+                logger.info(`用户${userId}已提现订单总金额: ${withdrawnOrderTotal}`);
+              }
+              
+              // 计算可提现金额 = (总订单金额 - 已提现订单金额) * 分成比例
+              const effectiveOrderAmount = Math.max(0, totalOrderAmount - withdrawnOrderTotal);
+              availableCommission = effectiveOrderAmount * commissionRate;
+              
+              logger.info(`用户${userId}提现计算: 总订单金额=${totalOrderAmount}, 已提现订单金额=${withdrawnOrderTotal}, 有效订单金额=${effectiveOrderAmount}, 分成比例=${commissionRate}, 可提现金额=${availableCommission}`);
             }
           }
         } catch (error) {
@@ -602,6 +623,7 @@ class UserAdapterService {
         ...stats,
         commissionRate,
         totalOrderAmount: totalOrderAmount.toFixed(2),
+        withdrawnOrderTotal: withdrawnOrderTotal.toFixed(2),
         availableCommission: availableCommission.toFixed(2),
         confirmedOrders,
         transactionIds
@@ -613,6 +635,7 @@ class UserAdapterService {
         inviteCode: null,
         commissionRate: 0,
         totalOrderAmount: "0.00",
+        withdrawnOrderTotal: "0.00",
         availableCommission: "0.00",
         confirmedOrders: [],
         transactionIds: []

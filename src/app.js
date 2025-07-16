@@ -330,7 +330,7 @@ app.use("/api/wx-delivery", wxDeliveryRoutes);
 // 添加提现相关路由
 app.use("/api/withdraw", withdrawRoutes);
 // 添加微信转账相关路由
-app.use("/api/wechat-transfer", wechatTransferRoutes);
+app.use("/api/wechat", wechatTransferRoutes);
 
 // 404 处理
 app.use("*", (req, res) => {
