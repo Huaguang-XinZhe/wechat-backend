@@ -48,11 +48,22 @@ router.post("/request", authMiddleware, async (req, res, next) => {
         is_partial // 传递部分提现标志，但不会传递给微信API
       });
       
-      res.json({
+      // 构建响应，包含验证信息
+      const response = {
         success: true,
         message: "提现申请已提交",
         data: withdrawResult
-      });
+      };
+      
+      // 如果有验证结果，添加更详细的提示
+      if (withdrawResult.verification) {
+        const { estimatedAmount, verifiedAmount } = withdrawResult.verification;
+        if (verifiedAmount < estimatedAmount) {
+          response.message = `提现申请已提交，根据微信订单验证，实际可提现金额为¥${verifiedAmount.toFixed(2)}`;
+        }
+      }
+      
+      res.json(response);
     } catch (withdrawError) {
       // 捕获提现服务的错误，返回更详细的错误信息
       logger.error("提现申请失败:", withdrawError);

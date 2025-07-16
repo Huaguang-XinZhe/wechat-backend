@@ -2,6 +2,7 @@ const logger = require("../utils/logger");
 const { WxWithdrawRecord, generateWithdrawBillNo } = require("../models/withdrawModel");
 const UserAdapterService = require("./userAdapterService");
 const wechatTransferService = require("./wechatTransferService");
+const wechatService = require("./wechatService");
 
 class WithdrawService {
   /**
@@ -12,6 +13,7 @@ class WithdrawService {
   async getWithdrawInfo(userId) {
     try {
       // 获取用户邀请提现信息
+      // 注意：此处获取的是预估可提现金额，实际提现时需要通过微信官方API验证订单交易状态
       const withdrawInfo = await UserAdapterService.getInviteWithdrawInfo(userId);
       
       // 获取用户openid
@@ -54,7 +56,7 @@ class WithdrawService {
     const { amount, remark = "邀请奖励提现", is_partial = false } = options;
     
     try {
-      // 获取用户提现信息
+      // 获取用户提现信息（预估可提现金额）
       const withdrawInfo = await UserAdapterService.getInviteWithdrawInfo(user.id);
       
       // 确定提现金额
@@ -124,10 +126,54 @@ class WithdrawService {
         const transInfo = withdrawInfo.transactionIds.find(tx => tx.order_sn === order.order_sn);
         return {
           order_sn: order.order_sn,
-          order_amount: order.total_amount,
+          order_amount: order.pay_amount,
           transaction_id: transInfo ? transInfo.transaction_id : null
         };
       });
+      
+      // 注意：在实际生产环境中，应该在此处调用微信官方API验证每个订单的交易状态
+      // 例如：使用 /wxa/sec/order/get_order 接口查询订单状态，确认 order_state 为 4（交易完成）
+      // 并获取实际支付金额 paid_amount，然后重新计算可提现金额
+      // 以下是伪代码示例：
+      /*
+      let verifiedOrderAmount = 0;
+      for (const order of orderInfos) {
+        if (order.transaction_id) {
+          const orderStatus = await checkOrderStatus(order.transaction_id);
+          if (orderStatus.order_state === 4) { // 4表示交易完成
+            verifiedOrderAmount += orderStatus.paid_amount / 100; // 微信返回的金额单位为分
+          }
+        }
+      }
+      const verifiedAvailableAmount = verifiedOrderAmount * withdrawInfo.commissionRate;
+      actualAmount = Math.min(actualAmount, verifiedAvailableAmount);
+      */
+      
+      // 调用微信官方API验证订单状态，计算实际可提现金额
+      const verificationResult = await this.verifyOrdersAndCalculateAmount(
+        orderInfos,
+        withdrawInfo.commissionRate
+      );
+      
+      // 如果验证失败，记录日志但继续使用预估金额
+      if (!verificationResult.success) {
+        logger.warn(`订单验证失败，将使用预估金额: ${verificationResult.message}`);
+      } else {
+        // 使用验证后的实际可提现金额
+        const verifiedAmount = verificationResult.verifiedCommissionAmount;
+        
+        logger.info(`预估可提现金额: ${actualAmount}, 实际可提现金额: ${verifiedAmount}`);
+        
+        // 如果实际可提现金额小于预估金额，使用实际金额
+        if (verifiedAmount < actualAmount) {
+          actualAmount = verifiedAmount;
+          
+          // 如果实际可提现金额为0，则无法提现
+          if (actualAmount <= 0) {
+            throw new Error("根据微信官方API验证，没有可提现的订单金额");
+          }
+        }
+      }
       
       // 计算实际提现金额对应的订单金额
       const orderAmountForWithdraw = actualAmount / withdrawInfo.commissionRate;
@@ -142,7 +188,9 @@ class WithdrawService {
         status: "PROCESSING",
         order_amount_total: orderAmountForWithdraw, // 只记录实际提现金额对应的订单金额
         commission_rate: withdrawInfo.commissionRate,
-        related_order_infos: JSON.stringify(orderInfos)
+        related_order_infos: JSON.stringify(verificationResult.success ? 
+          { verifiedOrders: verificationResult.verifiedOrders, unverifiedOrders: verificationResult.unverifiedOrders } : 
+          orderInfos)
       });
       
       // 调用微信转账接口
@@ -182,7 +230,7 @@ class WithdrawService {
         // 这样如果用户关闭收款弹窗，不会误标记为成功
         
         // 计算是否是部分提现
-        const isPartial = actualAmount < availableAmount || isLimitedBySingle || isLimitedByDaily;
+        const isPartial = actualAmount < parseFloat(withdrawInfo.availableCommission) || isLimitedBySingle || isLimitedByDaily;
         
         // 返回结果，包含package_info用于拉起微信收款确认页面
         return {
@@ -194,7 +242,13 @@ class WithdrawService {
           status: "PROCESSING", // 状态保持为处理中，等待回调更新
           createTime: withdrawRecord.create_time,
           package_info: transferResult.package_info || null,
-          is_partial: isPartial // 返回部分提现标志，用于前端逻辑
+          is_partial: isPartial, // 返回部分提现标志，用于前端逻辑
+          verification: verificationResult.success ? {
+            verifiedOrderCount: verificationResult.verifiedOrderCount,
+            totalOrderCount: orderInfos.length,
+            estimatedAmount: parseFloat(withdrawInfo.availableCommission),
+            verifiedAmount: verificationResult.verifiedCommissionAmount
+          } : null
         };
       } catch (transferError) {
         // 更新提现记录为失败
@@ -208,6 +262,105 @@ class WithdrawService {
     } catch (error) {
       logger.error("申请提现失败:", error);
       throw error;
+    }
+  }
+  
+  /**
+   * 验证订单状态并计算实际可提现金额
+   * @param {Array} orderInfos 订单信息数组
+   * @param {number} commissionRate 分成比例
+   * @returns {Promise<Object>} 验证结果
+   */
+  async verifyOrdersAndCalculateAmount(orderInfos, commissionRate) {
+    try {
+      // 提取有效的交易ID
+      const transactionIds = orderInfos
+        .filter(order => order.transaction_id)
+        .map(order => order.transaction_id);
+      
+      if (transactionIds.length === 0) {
+        logger.warn("没有有效的交易ID可验证");
+        return {
+          success: false,
+          verifiedOrderAmount: 0,
+          verifiedCommissionAmount: 0,
+          message: "没有有效的交易ID可验证"
+        };
+      }
+      
+      logger.info(`开始验证${transactionIds.length}个订单的交易状态`);
+      
+      // 批量获取订单状态
+      const orderStatusMap = await wechatService.batchGetOrderStatus(transactionIds);
+      
+      // 计算已验证的订单金额
+      let verifiedOrderAmount = 0;
+      let verifiedOrderCount = 0;
+      const verifiedOrders = [];
+      const unverifiedOrders = [];
+      
+      for (const order of orderInfos) {
+        if (!order.transaction_id) {
+          unverifiedOrders.push({
+            order_sn: order.order_sn,
+            reason: "缺少交易ID"
+          });
+          continue;
+        }
+        
+        const orderStatus = orderStatusMap[order.transaction_id];
+        if (!orderStatus) {
+          unverifiedOrders.push({
+            order_sn: order.order_sn,
+            transaction_id: order.transaction_id,
+            reason: "无法获取订单状态"
+          });
+          continue;
+        }
+        
+        // 检查订单状态是否为交易完成 (4)
+        if (orderStatus.order_state === 4) {
+          // 微信返回的金额单位为分，需要转换为元
+          const paidAmount = orderStatus.paid_amount / 100;
+          verifiedOrderAmount += paidAmount;
+          verifiedOrderCount++;
+          
+          verifiedOrders.push({
+            order_sn: order.order_sn,
+            transaction_id: order.transaction_id,
+            paid_amount: paidAmount
+          });
+        } else {
+          unverifiedOrders.push({
+            order_sn: order.order_sn,
+            transaction_id: order.transaction_id,
+            order_state: orderStatus.order_state,
+            reason: "订单状态不是交易完成"
+          });
+        }
+      }
+      
+      // 计算实际可提现金额
+      const verifiedCommissionAmount = verifiedOrderAmount * commissionRate;
+      
+      logger.info(`订单验证结果: 总订单数=${orderInfos.length}, 已验证订单数=${verifiedOrderCount}, 验证通过金额=${verifiedOrderAmount}, 实际可提现金额=${verifiedCommissionAmount}`);
+      
+      return {
+        success: true,
+        verifiedOrderAmount,
+        verifiedCommissionAmount,
+        verifiedOrderCount,
+        verifiedOrders,
+        unverifiedOrders
+      };
+    } catch (error) {
+      logger.error("验证订单状态失败:", error);
+      return {
+        success: false,
+        verifiedOrderAmount: 0,
+        verifiedCommissionAmount: 0,
+        message: `验证订单状态失败: ${error.message}`
+      };
     }
   }
   

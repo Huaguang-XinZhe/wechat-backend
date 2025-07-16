@@ -513,7 +513,7 @@ class UserAdapterService {
   /**
    * 获取用户邀请提现信息
    * @param {number} userId 用户ID
-   * @returns {Promise<Object>} 邀请提现信息
+   * @returns {Promise<Object>} 邀请提现信息，包含预估可提现金额
    */
   static async getInviteWithdrawInfo(userId) {
     try {
@@ -523,6 +523,8 @@ class UserAdapterService {
       // 获取分成比例（从环境变量或配置中获取，默认为30%）
       const commissionRate = parseFloat(process.env.COMMISSION_RATE || 0.3);
       
+      // 以下计算的是预估可提现金额，实际提现时需要通过微信官方API验证订单交易状态
+      // 实际可提现金额可能与预估值有差异
       let totalOrderAmount = 0;
       let availableCommission = 0;
       let confirmedOrders = [];
@@ -610,11 +612,12 @@ class UserAdapterService {
                 }
               }
               
-              // 计算可提现金额 = (总订单金额 - 已提现订单金额) * 分成比例
+              // 计算预估可提现金额 = (总订单金额 - 已提现订单金额) * 分成比例
+              // 注意：这里计算的是预估值，实际提现时需要通过微信官方API验证订单状态
               const effectiveOrderAmount = Math.max(0, totalOrderAmount - withdrawnOrderTotal);
               availableCommission = effectiveOrderAmount * commissionRate;
               
-              logger.info(`用户${userId}提现计算: 总订单金额=${totalOrderAmount}, 已提现订单金额=${withdrawnOrderTotal}, 有效订单金额=${effectiveOrderAmount}, 分成比例=${commissionRate}, 可提现金额=${availableCommission}`);
+              logger.info(`用户${userId}预估可提现金额计算: 总订单金额=${totalOrderAmount}, 已提现订单金额=${withdrawnOrderTotal}, 有效订单金额=${effectiveOrderAmount}, 分成比例=${commissionRate}, 预估可提现金额=${availableCommission}`);
               
               // 检查是否启用测试模式提现
               const testWithdrawMode = process.env.TEST_WITHDRAW_MODE === 'true';

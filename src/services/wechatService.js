@@ -1,3 +1,4 @@
+const axios = require("axios");
 const logger = require("../utils/logger");
 const WechatBaseService = require("./wechatBaseService");
 const wechatAuthService = require("./wechatAuthService");
@@ -117,6 +118,100 @@ class WechatService {
    */
   async addDeliveryInfo(accessToken, deliveryData) {
     return this.deliveryService.addDeliveryInfo(accessToken, deliveryData);
+  }
+
+  /**
+   * 获取微信小程序订单状态
+   * @param {string} transactionId 微信支付交易ID
+   * @returns {Promise<Object>} 订单状态信息
+   */
+  async getOrderStatus(transactionId) {
+    try {
+      // 获取访问令牌
+      const accessToken = await this.baseService.getAccessToken();
+      
+      if (!accessToken) {
+        throw new Error("无法获取微信访问令牌");
+      }
+
+      // 调用微信小程序安全API获取订单状态
+      const url = `https://api.weixin.qq.com/wxa/sec/order/get_order?access_token=${accessToken}`;
+      
+      logger.info(`请求微信订单状态API: ${url}, 交易ID: ${transactionId}`);
+      
+      const response = await axios.post(url, {
+        transaction_id: transactionId
+      });
+      
+      logger.info(`微信订单状态API响应: ${JSON.stringify(response.data)}`);
+      
+      // 检查API响应
+      if (response.data.errcode !== 0) {
+        throw new Error(`微信订单状态API错误: ${response.data.errcode}, ${response.data.errmsg}`);
+      }
+      
+      return response.data.order;
+    } catch (error) {
+      logger.error(`获取微信订单状态失败:`, error);
+      
+      // 添加更详细的错误信息记录
+      if (error.response) {
+        logger.error(`微信API响应错误: 状态码 ${error.response.status}`);
+        logger.error(`错误详情: ${JSON.stringify(error.response.data)}`);
+      }
+      
+      throw error;
+    }
+  }
+
+  /**
+   * 批量获取订单状态
+   * @param {Array<string>} transactionIds 微信支付交易ID数组
+   * @returns {Promise<Object>} 订单状态信息映射 {transactionId: orderInfo}
+   */
+  async batchGetOrderStatus(transactionIds) {
+    if (!transactionIds || transactionIds.length === 0) {
+      return {};
+    }
+    
+    const results = {};
+    const errors = [];
+    
+    // 并发请求，但限制并发数为5
+    const concurrencyLimit = 5;
+    const batches = [];
+    
+    // 将交易ID分组
+    for (let i = 0; i < transactionIds.length; i += concurrencyLimit) {
+      batches.push(transactionIds.slice(i, i + concurrencyLimit));
+    }
+    
+    // 按批次处理
+    for (const batch of batches) {
+      const batchPromises = batch.map(async (transactionId) => {
+        try {
+          const orderInfo = await this.getOrderStatus(transactionId);
+          results[transactionId] = orderInfo;
+        } catch (error) {
+          errors.push({ transactionId, error: error.message });
+          logger.error(`获取交易ID ${transactionId} 的订单状态失败:`, error);
+        }
+      });
+      
+      // 等待当前批次完成
+      await Promise.all(batchPromises);
+      
+      // 添加小延迟，避免请求过于频繁
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    
+    // 记录处理结果
+    logger.info(`批量获取订单状态完成，成功: ${Object.keys(results).length}, 失败: ${errors.length}`);
+    if (errors.length > 0) {
+      logger.error(`批量获取订单状态错误:`, errors);
+    }
+    
+    return results;
   }
 }
 
