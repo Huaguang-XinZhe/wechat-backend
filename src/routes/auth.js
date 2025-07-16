@@ -148,13 +148,15 @@ router.post("/phoneLogin", async (req, res, next) => {
     
     // 尝试从原始请求体中解析数据
     let code, encryptedData, iv, inviteCode;
+    let dataSource = "未知";
     
     // 1. 尝试从req.body中获取
     if (req.body && Object.keys(req.body).length > 0) {
       logger.info("从req.body中获取参数");
       ({ code, encryptedData, iv, inviteCode } = req.body);
+      dataSource = "req.body";
     } 
-    // 2. 如果req.body为空，尝试从原始请求体中解析
+    // 2. 如果req.body为空或缺少参数，尝试从原始请求体中解析
     else if (req.rawBody) {
       logger.info("从req.rawBody中解析参数");
       try {
@@ -163,6 +165,7 @@ router.post("/phoneLogin", async (req, res, next) => {
         encryptedData = parsedBody.encryptedData;
         iv = parsedBody.iv;
         inviteCode = parsedBody.inviteCode;
+        dataSource = "req.rawBody";
       } catch (e) {
         logger.error("解析原始请求体失败:", e);
       }
@@ -171,11 +174,12 @@ router.post("/phoneLogin", async (req, res, next) => {
     else if (Object.keys(req.query).length > 0) {
       logger.info("从req.query中获取参数");
       ({ code, encryptedData, iv, inviteCode } = req.query);
+      dataSource = "req.query";
     }
     
     // 记录最终获取到的参数
     logger.info(
-      `手机号登录请求参数: code=${code}, inviteCode=${
+      `手机号登录请求参数(来源:${dataSource}): code=${code}, inviteCode=${
         inviteCode || "无"
       }, encryptedData长度=${
         encryptedData ? encryptedData.length : 0
@@ -187,6 +191,11 @@ router.post("/phoneLogin", async (req, res, next) => {
         success: false,
         message: "缺少必要参数",
         code: 400,
+        debug: {
+          receivedBody: req.body,
+          receivedRawBody: req.rawBody ? "有数据" : "无数据",
+          dataSource: dataSource
+        }
       });
     }
 

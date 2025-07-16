@@ -46,11 +46,21 @@ app.use(express.json({
 app.use(cors({
   origin: '*', // 允许所有来源
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true // 允许携带凭证
 }));
 
 // 解析application/x-www-form-urlencoded
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ 
+  extended: true,
+  verify: (req, res, buf) => {
+    // 如果还没有设置rawBody，则设置
+    if (!req.rawBody) {
+      req.rawBody = buf.toString();
+      logger.info(`从urlencoded捕获原始请求体: ${req.rawBody}`);
+    }
+  }
+}));
 
 // 记录所有请求
 app.use((req, res, next) => {
