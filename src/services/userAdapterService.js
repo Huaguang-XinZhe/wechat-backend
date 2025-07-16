@@ -630,7 +630,7 @@ class UserAdapterService {
         // 添加提现限额信息
         singleLimit: process.env.WITHDRAW_SINGLE_LIMIT || '200.00', // 单笔提现限额，默认200元
         dailyLimit: process.env.WITHDRAW_DAILY_LIMIT || '2000.00',  // 日提现限额，默认2000元
-        dailyUsed: await this.getDailyWithdrawAmount(userInfo.openid) // 获取今日已提现金额
+        dailyUsed: await this.getDailyWithdrawAmount(userInfo ? userInfo.openid : null) // 获取今日已提现金额，确保userInfo存在
       };
     } catch (error) {
       logger.error("获取邀请提现信息失败:", error);
@@ -657,6 +657,11 @@ class UserAdapterService {
    */
   static async getDailyWithdrawAmount(openid) {
     try {
+      // 如果没有 openid，返回 0
+      if (!openid) {
+        return '0.00';
+      }
+      
       // 获取今天的开始和结束时间
       const today = new Date();
       today.setHours(0, 0, 0, 0);
