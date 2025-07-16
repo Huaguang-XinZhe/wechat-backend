@@ -175,6 +175,11 @@ class WithdrawService {
         }
       }
       
+      // 微信支付要求提现金额必须大于等于0.1元
+      if (actualAmount < 0.1) {
+        throw new Error("提现金额不能低于0.1元，这是微信支付的最低限额要求");
+      }
+      
       // 计算实际提现金额对应的订单金额
       const orderAmountForWithdraw = actualAmount / withdrawInfo.commissionRate;
       

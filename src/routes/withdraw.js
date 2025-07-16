@@ -62,13 +62,20 @@ router.post("/verify", authMiddleware, async (req, res, next) => {
         verificationDetails: verificationResult.success ? {
           verifiedOrders: verificationResult.verifiedOrders,
           unverifiedOrders: verificationResult.unverifiedOrders
-        } : null
+        } : null,
+        canWithdraw: verificationResult.verifiedCommissionAmount >= 0.1 // 添加是否可提现的标志
       }
     };
     
     // 如果验证金额与预估金额不同，添加提示信息
     if (verificationResult.success && verificationResult.verifiedCommissionAmount < parseFloat(withdrawInfo.availableCommission)) {
       response.message = `根据微信订单验证，实际可提现金额为¥${verificationResult.verifiedCommissionAmount.toFixed(2)}`;
+      
+      // 如果验证金额小于0.1元，添加额外提示
+      if (verificationResult.verifiedCommissionAmount < 0.1) {
+        response.message = `实际可提现金额为¥${verificationResult.verifiedCommissionAmount.toFixed(2)}，低于微信支付最低限额0.1元，暂不可提现`;
+        response.data.canWithdraw = false;
+      }
     }
     
     res.json(response);
