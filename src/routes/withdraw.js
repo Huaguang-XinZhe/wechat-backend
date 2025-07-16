@@ -5,6 +5,7 @@ const { authMiddleware } = require("../middleware/auth");
 const withdrawService = require("../services/withdrawService");
 const logger = require("../utils/logger");
 const { withdrawRequestSchema } = require("../models/withdrawModel");
+const UserAdapterService = require("../services/userAdapterService");
 
 // 获取提现信息
 router.get("/info", authMiddleware, async (req, res, next) => {
@@ -22,6 +23,62 @@ router.get("/info", authMiddleware, async (req, res, next) => {
   } catch (error) {
     logger.error("获取提现信息失败:", error);
     next(error);
+  }
+});
+
+// 预验证提现金额
+router.post("/verify", authMiddleware, async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    
+    // 获取用户提现信息
+    const withdrawInfo = await UserAdapterService.getInviteWithdrawInfo(userId);
+    
+    // 准备关联订单信息
+    const orderInfos = withdrawInfo.confirmedOrders.map(order => {
+      const transInfo = withdrawInfo.transactionIds.find(tx => tx.order_sn === order.order_sn);
+      return {
+        order_sn: order.order_sn,
+        order_amount: order.pay_amount,
+        transaction_id: transInfo ? transInfo.transaction_id : null
+      };
+    });
+    
+    // 调用验证服务
+    const verificationResult = await withdrawService.verifyOrdersAndCalculateAmount(
+      orderInfos,
+      withdrawInfo.commissionRate
+    );
+    
+    // 构建响应
+    const response = {
+      success: true,
+      message: "验证成功",
+      data: {
+        estimatedAmount: parseFloat(withdrawInfo.availableCommission),
+        verifiedAmount: verificationResult.verifiedCommissionAmount,
+        verifiedOrderCount: verificationResult.verifiedOrderCount,
+        totalOrderCount: orderInfos.length,
+        verificationDetails: verificationResult.success ? {
+          verifiedOrders: verificationResult.verifiedOrders,
+          unverifiedOrders: verificationResult.unverifiedOrders
+        } : null
+      }
+    };
+    
+    // 如果验证金额与预估金额不同，添加提示信息
+    if (verificationResult.success && verificationResult.verifiedCommissionAmount < parseFloat(withdrawInfo.availableCommission)) {
+      response.message = `根据微信订单验证，实际可提现金额为¥${verificationResult.verifiedCommissionAmount.toFixed(2)}`;
+    }
+    
+    res.json(response);
+  } catch (error) {
+    logger.error("预验证提现金额失败:", error);
+    res.status(400).json({
+      success: false,
+      message: error.message || "预验证提现金额失败",
+      code: 400,
+    });
   }
 });
 

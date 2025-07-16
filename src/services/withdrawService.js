@@ -201,8 +201,7 @@ class WithdrawService {
         // 构建转账数据
         const transferData = {
           outBillNo,
-          // 使用固定值10分进行转账，与商家转账测试保持一致
-          transferAmount: 10, // 0.1元 = 10分
+          transferAmount: transferAmountInCents, // 转换后的金额，单位为分
           openid: user.openid,
           transferRemark: remark,
           transferSceneId: "1000", // 转账场景ID，1000 为现金营销场景
