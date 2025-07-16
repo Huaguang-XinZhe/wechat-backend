@@ -134,15 +134,9 @@ router.post("/transfer/notify", async (req, res) => {
     const requestId = `notify-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
     
     logger.info(`=== 微信转账回调开始处理 [${requestId}] - ${ip} ===`);
-    logger.info(`请求头 [${requestId}]: ${JSON.stringify(req.headers)}`);
     
-    // 验证签名 - 从请求头获取签名信息
-    const wechatpaySerial = req.headers['wechatpay-serial'];
-    const wechatpaySignature = req.headers['wechatpay-signature'];
-    const wechatpayTimestamp = req.headers['wechatpay-timestamp'];
-    const wechatpayNonce = req.headers['wechatpay-nonce'];
-    
-    logger.info(`签名信息 [${requestId}]: Serial=${wechatpaySerial}, Timestamp=${wechatpayTimestamp}, Nonce=${wechatpayNonce}`);
+    // 获取回调ID，用于幂等处理
+    let notificationId = null;
     
     // 直接处理请求体，不使用事件监听方式
     let jsonData = '';
@@ -150,22 +144,39 @@ router.post("/transfer/notify", async (req, res) => {
     // 如果请求体已经是JSON对象（express可能已经解析）
     if (req.body && typeof req.body === 'object') {
       jsonData = JSON.stringify(req.body);
+      notificationId = req.body.id;
       logger.info(`请求体已被解析为对象 [${requestId}]`);
     } 
     // 如果请求体是字符串
     else if (req.body && typeof req.body === 'string') {
       jsonData = req.body;
+      try {
+        const parsed = JSON.parse(jsonData);
+        notificationId = parsed.id;
+      } catch (e) {}
       logger.info(`请求体是字符串 [${requestId}]`);
     }
     // 如果请求体为空，尝试使用原始请求体
     else if (req.rawBody) {
       jsonData = req.rawBody;
+      try {
+        const parsed = JSON.parse(jsonData);
+        notificationId = parsed.id;
+      } catch (e) {}
       logger.info(`使用原始请求体 [${requestId}]`);
     }
     // 如果以上都没有，记录错误
     else {
       logger.error(`无法获取请求体 [${requestId}]`);
       return res.json({ code: "SUCCESS", message: "OK" }); // 告知微信我们已收到通知
+    }
+    
+    // 检查是否已处理过该通知
+    if (notificationId && router.post("/transfer/notify").processedNotifications) {
+      if (router.post("/transfer/notify").processedNotifications[notificationId]) {
+        logger.info(`检测到重复通知 [${requestId}]: ${notificationId}，直接返回成功`);
+        return res.json({ code: "SUCCESS", message: "OK" });
+      }
     }
     
     logger.info(`完整JSON数据长度 [${requestId}]: ${jsonData.length}`);
@@ -177,6 +188,14 @@ router.post("/transfer/notify", async (req, res) => {
     try {
       notifyData = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
       logger.info(`解析JSON数据成功 [${requestId}]`);
+      
+      // 验证签名 - 从请求头获取签名信息
+      const wechatpaySerial = req.headers['wechatpay-serial'];
+      const wechatpaySignature = req.headers['wechatpay-signature'];
+      const wechatpayTimestamp = req.headers['wechatpay-timestamp'];
+      const wechatpayNonce = req.headers['wechatpay-nonce'];
+      
+      logger.info(`签名信息 [${requestId}]: Serial=${wechatpaySerial}, Timestamp=${wechatpayTimestamp}, Nonce=${wechatpayNonce}`);
       
       // 验证签名 - 如果有签名信息则进行验证
       if (wechatpaySignature && wechatpayTimestamp && wechatpayNonce) {
@@ -293,6 +312,28 @@ router.post("/transfer/notify", async (req, res) => {
       );
     }
     
+    // 记录已处理的通知ID，避免重复处理
+    if (notificationId) {
+      if (!router.post("/transfer/notify").processedNotifications) {
+        router.post("/transfer/notify").processedNotifications = {};
+      }
+      
+      // 记录通知ID和处理时间
+      router.post("/transfer/notify").processedNotifications[notificationId] = {
+        processedAt: new Date().toISOString(),
+        outBillNo,
+        state
+      };
+      
+      // 限制缓存大小，避免内存泄漏
+      const maxCacheSize = 1000;
+      const keys = Object.keys(router.post("/transfer/notify").processedNotifications);
+      if (keys.length > maxCacheSize) {
+        // 删除最旧的记录
+        delete router.post("/transfer/notify").processedNotifications[keys[0]];
+      }
+    }
+    
     // 返回成功响应给微信
     logger.info(`转账回调处理完成 [${requestId}]，返回成功`);
     return res.json({ code: "SUCCESS", message: "OK" });
@@ -306,6 +347,18 @@ router.post("/transfer/notify", async (req, res) => {
 // 处理最近的处理中提现记录
 router.post("/transfer/notify")._handleLatestProcessingRecord = async function(requestId, state) {
   try {
+    // 检查是否已处理过该请求
+    if (!router.post("/transfer/notify").processedRequests) {
+      router.post("/transfer/notify").processedRequests = {};
+    }
+    
+    // 使用requestId作为缓存键，避免短时间内重复处理同一请求
+    const cacheKey = `latest_${requestId}`;
+    if (router.post("/transfer/notify").processedRequests[cacheKey]) {
+      logger.info(`该请求已处理过 [${requestId}], 跳过处理`);
+      return;
+    }
+    
     // 查询对应的提现记录
     const { WxWithdrawRecord } = require("../models/withdrawModel");
     
@@ -317,6 +370,20 @@ router.post("/transfer/notify")._handleLatestProcessingRecord = async function(r
     
     if (latestRecord) {
       logger.info(`找到最近的处理中记录 [${requestId}]: ID=${latestRecord.id}, 单号=${latestRecord.out_bill_no}`);
+      
+      // 记录处理结果
+      router.post("/transfer/notify").processedRequests[cacheKey] = {
+        processedAt: new Date().toISOString(),
+        recordId: latestRecord.id,
+        outBillNo: latestRecord.out_bill_no
+      };
+      
+      // 如果已经在processedBillNos中记录过，则跳过处理
+      if (router.post("/transfer/notify").processedBillNos && 
+          router.post("/transfer/notify").processedBillNos[latestRecord.out_bill_no]) {
+        logger.info(`该单号已处理过 [${requestId}]: ${latestRecord.out_bill_no}, 跳过处理`);
+        return;
+      }
       
       // 幂等处理 - 更新为成功状态
       if (state.toUpperCase() === 'SUCCESS') {
@@ -337,6 +404,16 @@ router.post("/transfer/notify")._handleLatestProcessingRecord = async function(r
         // 再次查询确认状态已更新
         const updatedRecord = await WxWithdrawRecord.findByPk(latestRecord.id);
         logger.info(`提现记录更新结果 [${requestId}]: ID=${updatedRecord.id}, 状态=${updatedRecord.status}`);
+        
+        // 记录到processedBillNos中
+        if (!router.post("/transfer/notify").processedBillNos) {
+          router.post("/transfer/notify").processedBillNos = {};
+        }
+        router.post("/transfer/notify").processedBillNos[latestRecord.out_bill_no] = {
+          processedAt: new Date().toISOString(),
+          result: 'updated_via_latest',
+          newStatus: 'SUCCESS'
+        };
       } else if (state.toUpperCase() === 'FAIL') {
         // 处理失败状态
         await WxWithdrawRecord.update(
@@ -354,9 +431,33 @@ router.post("/transfer/notify")._handleLatestProcessingRecord = async function(r
         
         const updatedRecord = await WxWithdrawRecord.findByPk(latestRecord.id);
         logger.info(`提现记录更新为失败 [${requestId}]: ID=${updatedRecord.id}, 状态=${updatedRecord.status}`);
+        
+        // 记录到processedBillNos中
+        if (!router.post("/transfer/notify").processedBillNos) {
+          router.post("/transfer/notify").processedBillNos = {};
+        }
+        router.post("/transfer/notify").processedBillNos[latestRecord.out_bill_no] = {
+          processedAt: new Date().toISOString(),
+          result: 'updated_via_latest',
+          newStatus: 'FAILED'
+        };
       }
     } else {
       logger.warn(`未找到处理中的提现记录 [${requestId}]`);
+      
+      // 记录处理结果
+      router.post("/transfer/notify").processedRequests[cacheKey] = {
+        processedAt: new Date().toISOString(),
+        result: 'no_processing_record_found'
+      };
+    }
+    
+    // 限制缓存大小，避免内存泄漏
+    const maxCacheSize = 100;
+    const keys = Object.keys(router.post("/transfer/notify").processedRequests);
+    if (keys.length > maxCacheSize) {
+      // 删除最旧的记录
+      delete router.post("/transfer/notify").processedRequests[keys[0]];
     }
   } catch (dbError) {
     logger.error(`数据库操作失败 [${requestId}]: ${dbError.message}`);
@@ -367,6 +468,17 @@ router.post("/transfer/notify")._handleLatestProcessingRecord = async function(r
 router.post("/transfer/notify")._handleWithdrawRecordWithBillNo = async function(requestId, outBillNo, state, transferDetail) {
   try {
     logger.info(`处理指定单号的提现记录 [${requestId}]: ${outBillNo}, 状态=${state}`);
+    
+    // 检查是否已处理过该单号
+    if (!router.post("/transfer/notify").processedBillNos) {
+      router.post("/transfer/notify").processedBillNos = {};
+    }
+    
+    // 如果已处理过该单号，直接返回
+    if (router.post("/transfer/notify").processedBillNos[outBillNo]) {
+      logger.info(`该单号已处理过 [${requestId}]: ${outBillNo}, 跳过处理`);
+      return;
+    }
     
     // 查询对应的提现记录
     const { WxWithdrawRecord } = require("../models/withdrawModel");
@@ -404,18 +516,52 @@ router.post("/transfer/notify")._handleWithdrawRecordWithBillNo = async function
           );
           
           logger.info(`提现记录状态更新结果 [${requestId}]: 影响行数=${updatedCount}, 新状态=${newStatus}`);
+          
+          // 记录处理结果
+          router.post("/transfer/notify").processedBillNos[outBillNo] = {
+            processedAt: new Date().toISOString(),
+            result: updatedCount > 0 ? 'updated' : 'no_change',
+            newStatus
+          };
         } else {
           logger.info(`提现记录状态无需更新 [${requestId}]: 当前状态=${withdrawRecord.status}`);
+          
+          // 记录处理结果
+          router.post("/transfer/notify").processedBillNos[outBillNo] = {
+            processedAt: new Date().toISOString(),
+            result: 'no_change_needed'
+          };
         }
       } else {
         logger.info(`提现记录已经是终态 [${requestId}]: ${withdrawRecord.status}, 无需更新`);
+        
+        // 记录处理结果
+        router.post("/transfer/notify").processedBillNos[outBillNo] = {
+          processedAt: new Date().toISOString(),
+          result: 'already_final_state',
+          status: withdrawRecord.status
+        };
       }
     } else {
       logger.warn(`未找到对应单号的提现记录 [${requestId}]: ${outBillNo}`);
+      
+      // 记录处理结果
+      router.post("/transfer/notify").processedBillNos[outBillNo] = {
+        processedAt: new Date().toISOString(),
+        result: 'record_not_found'
+      };
+    }
+    
+    // 限制缓存大小，避免内存泄漏
+    const maxCacheSize = 1000;
+    const keys = Object.keys(router.post("/transfer/notify").processedBillNos);
+    if (keys.length > maxCacheSize) {
+      // 删除最旧的记录
+      delete router.post("/transfer/notify").processedBillNos[keys[0]];
     }
   } catch (dbError) {
     logger.error(`更新提现记录失败 [${requestId}]: ${dbError.message}`);
   }
 };
 
-module.exports = router; 
+module.exports = router;
