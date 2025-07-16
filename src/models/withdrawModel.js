@@ -11,11 +11,6 @@ const WxWithdrawRecord = legacySequelize.define(
       primaryKey: true,
       autoIncrement: true,
     },
-    member_id: {
-      type: DataTypes.BIGINT,
-      allowNull: false,
-      comment: "会员ID",
-    },
     openid: {
       type: DataTypes.STRING(100),
       allowNull: false,
@@ -42,22 +37,11 @@ const WxWithdrawRecord = legacySequelize.define(
       defaultValue: "PROCESSING",
       comment: "状态：PROCESSING-处理中，SUCCESS-成功，FAILED-失败",
     },
-    remark: {
-      type: DataTypes.STRING(255),
-      allowNull: true,
-      comment: "备注",
-    },
     create_time: {
       type: DataTypes.DATE,
       allowNull: false,
       defaultValue: DataTypes.NOW,
       comment: "创建时间",
-    },
-    update_time: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: DataTypes.NOW,
-      comment: "更新时间",
     },
     order_amount_total: {
       type: DataTypes.DECIMAL(10, 2),
@@ -69,25 +53,16 @@ const WxWithdrawRecord = legacySequelize.define(
       allowNull: false,
       comment: "分成比例",
     },
-    related_orders: {
+    related_order_infos: {
       type: DataTypes.TEXT,
       allowNull: true,
-      comment: "关联的订单编号，JSON格式",
-    },
-    related_trans_ids: {
-      type: DataTypes.TEXT,
-      allowNull: true,
-      comment: "关联的微信交易ID，JSON格式",
+      comment: "关联的订单信息列表，JSON格式",
     },
   },
   {
     tableName: "wx_withdraw_record",
     timestamps: false,
     indexes: [
-      {
-        name: "idx_member_id",
-        fields: ["member_id"],
-      },
       {
         name: "idx_openid",
         fields: ["openid"],

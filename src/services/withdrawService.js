@@ -14,10 +14,16 @@ class WithdrawService {
       // 获取用户邀请提现信息
       const withdrawInfo = await UserAdapterService.getInviteWithdrawInfo(userId);
       
+      // 获取用户openid
+      const userInfo = await UserAdapterService.getUserInfo(userId);
+      if (!userInfo || !userInfo.openid) {
+        throw new Error("用户未绑定微信账号");
+      }
+      
       // 检查是否已经有进行中的提现申请
       const processingWithdraw = await WxWithdrawRecord.findOne({
         where: {
-          member_id: userId,
+          openid: userInfo.openid,
           status: "PROCESSING"
         },
         order: [["create_time", "DESC"]]
@@ -60,7 +66,7 @@ class WithdrawService {
       // 检查是否已经有进行中的提现申请
       const processingWithdraw = await WxWithdrawRecord.findOne({
         where: {
-          member_id: user.id,
+          openid: user.openid,
           status: "PROCESSING"
         }
       });
@@ -72,21 +78,25 @@ class WithdrawService {
       // 生成提现单号
       const outBillNo = generateWithdrawBillNo();
       
+      // 准备关联订单信息
+      const orderInfos = withdrawInfo.confirmedOrders.map(order => {
+        const transInfo = withdrawInfo.transactionIds.find(tx => tx.order_sn === order.order_sn);
+        return {
+          order_sn: order.order_sn,
+          order_amount: order.total_amount,
+          transaction_id: transInfo ? transInfo.transaction_id : null
+        };
+      });
+      
       // 创建提现记录
       const withdrawRecord = await WxWithdrawRecord.create({
-        member_id: user.id,
         openid: user.openid,
         out_bill_no: outBillNo,
         amount: availableAmount,
         status: "PROCESSING",
-        remark: remark,
         order_amount_total: parseFloat(withdrawInfo.totalOrderAmount),
         commission_rate: withdrawInfo.commissionRate,
-        related_orders: JSON.stringify(withdrawInfo.confirmedOrders.map(order => order.order_sn)),
-        related_trans_ids: JSON.stringify(withdrawInfo.transactionIds.map(tx => ({ 
-          order_sn: tx.order_sn, 
-          transaction_id: tx.transaction_id 
-        })))
+        related_order_infos: JSON.stringify(orderInfos)
       });
       
       // 调用微信转账接口
@@ -140,8 +150,7 @@ class WithdrawService {
       } catch (transferError) {
         // 更新提现记录为失败
         await withdrawRecord.update({
-          status: "FAILED",
-          remark: `转账失败: ${transferError.message || "未知错误"}`
+          status: "FAILED"
         });
         
         // 重新抛出错误
@@ -163,9 +172,15 @@ class WithdrawService {
     const { limit = 10, offset = 0 } = options;
     
     try {
+      // 获取用户openid
+      const userInfo = await UserAdapterService.getUserInfo(userId);
+      if (!userInfo || !userInfo.openid) {
+        throw new Error("用户未绑定微信账号");
+      }
+      
       const records = await WxWithdrawRecord.findAndCountAll({
         where: {
-          member_id: userId
+          openid: userInfo.openid
         },
         order: [["create_time", "DESC"]],
         limit,
@@ -181,8 +196,8 @@ class WithdrawService {
           amount: record.amount,
           status: record.status,
           createTime: record.create_time,
-          updateTime: record.update_time,
-          remark: record.remark
+          orderAmountTotal: record.order_amount_total,
+          commissionRate: record.commission_rate
         }))
       };
     } catch (error) {

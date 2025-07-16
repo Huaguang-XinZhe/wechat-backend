@@ -743,6 +743,38 @@ class UserAdapterService {
       return false;
     }
   }
+
+  /**
+   * 根据用户ID获取用户信息（包括openid）
+   * @param {number} userId 用户ID
+   * @returns {Promise<Object>} 用户信息
+   */
+  static async getUserInfo(userId) {
+    try {
+      // 查找用户表
+      const member = await UmsMember.findByPk(userId);
+
+      if (!member) {
+        return null;
+      }
+
+      // 查找关联的微信信息 - 需要通过 username 反向查找
+      // member.username 是 base64 编码的 openid，需要解码后查找微信表
+      const originalOpenid = this.decodeOpenidFromBase64(member.username);
+      
+      return {
+        id: member.id,
+        username: member.username,
+        nickname: member.nickname,
+        phone: member.phone,
+        icon: member.icon,
+        openid: originalOpenid
+      };
+    } catch (error) {
+      logger.error("获取用户信息失败:", error);
+      return null;
+    }
+  }
 }
 
 module.exports = UserAdapterService;
