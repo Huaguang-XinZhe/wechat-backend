@@ -75,6 +75,35 @@ class WithdrawService {
         availableAmount = parseFloat(withdrawInfo.availableCommission);
       }
       
+      // 获取单笔限额和日限额
+      const singleLimit = parseFloat(withdrawInfo.singleLimit || 0);
+      const dailyLimit = parseFloat(withdrawInfo.dailyLimit || 0);
+      const dailyUsed = parseFloat(withdrawInfo.dailyUsed || 0);
+      
+      // 应用限额逻辑
+      let actualAmount = availableAmount;
+      let isLimitedBySingle = false;
+      let isLimitedByDaily = false;
+      
+      // 检查单笔限额
+      if (singleLimit > 0 && actualAmount > singleLimit) {
+        actualAmount = singleLimit;
+        isLimitedBySingle = true;
+      }
+      
+      // 检查日限额
+      if (dailyLimit > 0) {
+        const dailyRemaining = dailyLimit - dailyUsed;
+        if (dailyRemaining <= 0) {
+          // 今日额度已用完
+          throw new Error("今日提现额度已用完，请明天再试");
+        } else if (actualAmount > dailyRemaining) {
+          // 今日剩余额度不足
+          actualAmount = dailyRemaining;
+          isLimitedByDaily = true;
+        }
+      }
+      
       // 检查是否已经有进行中的提现申请
       const processingWithdraw = await WxWithdrawRecord.findOne({
         where: {
@@ -104,7 +133,7 @@ class WithdrawService {
       const withdrawRecord = await WxWithdrawRecord.create({
         openid: user.openid,
         out_bill_no: outBillNo,
-        amount: availableAmount,
+        amount: actualAmount,
         status: "PROCESSING",
         order_amount_total: parseFloat(withdrawInfo.totalOrderAmount),
         commission_rate: withdrawInfo.commissionRate,
@@ -114,7 +143,7 @@ class WithdrawService {
       // 调用微信转账接口
       try {
         // 转换为分（1元=100分）
-        const transferAmountInCents = Math.round(availableAmount * 100);
+        const transferAmountInCents = Math.round(actualAmount * 100);
         
         // 构建转账数据
         const transferData = {
@@ -147,17 +176,20 @@ class WithdrawService {
         // 而是保持PROCESSING状态，等待微信转账回调通知
         // 这样如果用户关闭收款弹窗，不会误标记为成功
         
+        // 计算是否是部分提现
+        const isPartial = actualAmount < availableAmount || isLimitedBySingle || isLimitedByDaily;
+        
         // 返回结果，包含package_info用于拉起微信收款确认页面
         return {
           success: true,
           withdrawId: withdrawRecord.id,
           billNo: outBillNo,
           transferNo: transferResult.transferNo,
-          amount: 0.1, // 固定返回0.1元
+          amount: actualAmount, // 返回实际提现金额
           status: "PROCESSING", // 状态保持为处理中，等待回调更新
           createTime: withdrawRecord.create_time,
           package_info: transferResult.package_info || null,
-          is_partial: is_partial // 返回部分提现标志，用于前端逻辑
+          is_partial: isPartial // 返回部分提现标志，用于前端逻辑
         };
       } catch (transferError) {
         // 更新提现记录为失败

@@ -626,7 +626,11 @@ class UserAdapterService {
         withdrawnOrderTotal: withdrawnOrderTotal.toFixed(2),
         availableCommission: availableCommission.toFixed(2),
         confirmedOrders,
-        transactionIds
+        transactionIds,
+        // 添加提现限额信息
+        singleLimit: process.env.WITHDRAW_SINGLE_LIMIT || '200.00', // 单笔提现限额，默认200元
+        dailyLimit: process.env.WITHDRAW_DAILY_LIMIT || '2000.00',  // 日提现限额，默认2000元
+        dailyUsed: await this.getDailyWithdrawAmount(userInfo.openid) // 获取今日已提现金额
       };
     } catch (error) {
       logger.error("获取邀请提现信息失败:", error);
@@ -638,8 +642,43 @@ class UserAdapterService {
         withdrawnOrderTotal: "0.00",
         availableCommission: "0.00",
         confirmedOrders: [],
-        transactionIds: []
+        transactionIds: [],
+        singleLimit: process.env.WITHDRAW_SINGLE_LIMIT || '200.00',
+        dailyLimit: process.env.WITHDRAW_DAILY_LIMIT || '2000.00',
+        dailyUsed: '0.00'
       };
+    }
+  }
+
+  /**
+   * 获取用户今日已提现金额
+   * @param {string} openid 用户openid
+   * @returns {Promise<string>} 今日已提现金额
+   */
+  static async getDailyWithdrawAmount(openid) {
+    try {
+      // 获取今天的开始和结束时间
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      
+      // 查询今日成功提现记录
+      const [records] = await legacySequelize.query(`
+        SELECT SUM(amount) as total
+        FROM wx_withdraw_record
+        WHERE openid = '${openid}'
+        AND status = 'SUCCESS'
+        AND create_time >= '${today.toISOString().split('T')[0]} 00:00:00'
+        AND create_time < '${tomorrow.toISOString().split('T')[0]} 00:00:00'
+      `);
+      
+      // 返回今日已提现金额，如果没有则返回0
+      const dailyUsed = records && records[0] && records[0].total ? parseFloat(records[0].total) : 0;
+      return dailyUsed.toFixed(2);
+    } catch (error) {
+      logger.error("获取今日已提现金额失败:", error);
+      return '0.00';
     }
   }
 
