@@ -528,14 +528,15 @@ class UserAdapterService {
       let confirmedOrders = [];
       let transactionIds = [];
       let withdrawnOrderTotal = 0; // 已提现的订单总金额
+      let userOpenid = null; // 用户openid
       
       // 如果有邀请码，才计算提现金额
       if (stats.inviteCode) {
         try {
           // 获取用户openid
           const userInfo = await this.getUserInfo(userId);
-          if (!userInfo || !userInfo.openid) {
-            throw new Error("用户未绑定微信账号");
+          if (userInfo && userInfo.openid) {
+            userOpenid = userInfo.openid;
           }
           
           // 查询所有被该用户邀请的用户
@@ -592,19 +593,21 @@ class UserAdapterService {
               }
               
               // 查询已成功提现的记录
-              const [withdrawRecords] = await legacySequelize.query(`
-                SELECT id, amount, order_amount_total, related_order_infos
-                FROM wx_withdraw_record
-                WHERE openid = '${userInfo.openid}'
-                AND status = 'SUCCESS'
-              `);
-              
-              // 计算已提现的订单总金额
-              if (withdrawRecords && withdrawRecords.length > 0) {
-                withdrawnOrderTotal = withdrawRecords.reduce((sum, record) => sum + parseFloat(record.order_amount_total || 0), 0);
+              if (userOpenid) {
+                const [withdrawRecords] = await legacySequelize.query(`
+                  SELECT id, amount, order_amount_total, related_order_infos
+                  FROM wx_withdraw_record
+                  WHERE openid = '${userOpenid}'
+                  AND status = 'SUCCESS'
+                `);
                 
-                // 日志记录已提现金额
-                logger.info(`用户${userId}已提现订单总金额: ${withdrawnOrderTotal}`);
+                // 计算已提现的订单总金额
+                if (withdrawRecords && withdrawRecords.length > 0) {
+                  withdrawnOrderTotal = withdrawRecords.reduce((sum, record) => sum + parseFloat(record.order_amount_total || 0), 0);
+                  
+                  // 日志记录已提现金额
+                  logger.info(`用户${userId}已提现订单总金额: ${withdrawnOrderTotal}`);
+                }
               }
               
               // 计算可提现金额 = (总订单金额 - 已提现订单金额) * 分成比例
@@ -616,9 +619,53 @@ class UserAdapterService {
           }
         } catch (error) {
           logger.error("计算订单金额失败:", error);
+          // 即使计算失败，也继续返回已有的数据
         }
       }
       
+      // 获取今日已提现金额，如果无法获取则默认为0
+      let dailyUsed = '0.00';
+      try {
+        if (userOpenid) {
+          dailyUsed = await this.getDailyWithdrawAmount(userOpenid);
+        }
+      } catch (error) {
+        logger.error("获取今日已提现金额失败:", error);
+        // 继续使用默认值
+      }
+      
+      // 获取提现限额
+      const singleLimit = process.env.WITHDRAW_SINGLE_LIMIT || '200.00';
+      const dailyLimit = process.env.WITHDRAW_DAILY_LIMIT || '2000.00';
+      
+      // 检查是否有处理中的提现
+      let processingWithdraw = null;
+      try {
+        if (userOpenid) {
+          const [processing] = await legacySequelize.query(`
+            SELECT id, amount, status, create_time
+            FROM wx_withdraw_record
+            WHERE openid = '${userOpenid}'
+            AND status = 'PROCESSING'
+            ORDER BY create_time DESC
+            LIMIT 1
+          `);
+          
+          if (processing && processing.length > 0) {
+            processingWithdraw = {
+              id: processing[0].id,
+              amount: processing[0].amount,
+              status: processing[0].status,
+              createTime: processing[0].create_time
+            };
+          }
+        }
+      } catch (error) {
+        logger.error("查询处理中的提现失败:", error);
+        // 继续使用默认值
+      }
+      
+      // 返回结果，即使某些字段获取失败也能返回已计算好的数据
       return {
         ...stats,
         commissionRate,
@@ -627,10 +674,11 @@ class UserAdapterService {
         availableCommission: availableCommission.toFixed(2),
         confirmedOrders,
         transactionIds,
-        // 添加提现限额信息
-        singleLimit: process.env.WITHDRAW_SINGLE_LIMIT || '200.00', // 单笔提现限额，默认200元
-        dailyLimit: process.env.WITHDRAW_DAILY_LIMIT || '2000.00',  // 日提现限额，默认2000元
-        dailyUsed: await this.getDailyWithdrawAmount(userInfo ? userInfo.openid : null) // 获取今日已提现金额，确保userInfo存在
+        singleLimit,
+        dailyLimit,
+        dailyUsed,
+        processingWithdraw,
+        openid: userOpenid
       };
     } catch (error) {
       logger.error("获取邀请提现信息失败:", error);
@@ -645,7 +693,9 @@ class UserAdapterService {
         transactionIds: [],
         singleLimit: process.env.WITHDRAW_SINGLE_LIMIT || '200.00',
         dailyLimit: process.env.WITHDRAW_DAILY_LIMIT || '2000.00',
-        dailyUsed: '0.00'
+        dailyUsed: '0.00',
+        processingWithdraw: null,
+        openid: null
       };
     }
   }
