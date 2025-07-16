@@ -129,13 +129,18 @@ class WithdrawService {
         };
       });
       
+      // 计算实际提现金额对应的订单金额
+      const orderAmountForWithdraw = actualAmount / withdrawInfo.commissionRate;
+      
+      logger.info(`用户${user.id}提现: 实际提现金额=${actualAmount}, 对应订单金额=${orderAmountForWithdraw}, 总订单金额=${withdrawInfo.totalOrderAmount}, 分成比例=${withdrawInfo.commissionRate}`);
+      
       // 创建提现记录
       const withdrawRecord = await WxWithdrawRecord.create({
         openid: user.openid,
         out_bill_no: outBillNo,
         amount: actualAmount,
         status: "PROCESSING",
-        order_amount_total: parseFloat(withdrawInfo.totalOrderAmount),
+        order_amount_total: orderAmountForWithdraw, // 只记录实际提现金额对应的订单金额
         commission_rate: withdrawInfo.commissionRate,
         related_order_infos: JSON.stringify(orderInfos)
       });
