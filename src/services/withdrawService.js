@@ -143,9 +143,36 @@ class WithdrawService {
         // 调用转账接口
         const transferResult = await wechatTransferService.transferToUser(transferData);
         
-        // 重要：不再立即更新提现记录为成功状态
-        // 而是保持PROCESSING状态，等待微信转账回调通知
-        // 这样如果用户关闭收款弹窗，不会误标记为成功
+        // 根据转账接口返回的状态更新提现记录
+        let newStatus = "PROCESSING";
+        
+        // 从transferResult中获取状态并更新提现记录
+        if (transferResult && transferResult.status) {
+          // 记录详细的转账结果
+          logger.info(`转账接口返回结果: ${JSON.stringify(transferResult)}`);
+          
+          // 获取真实状态
+          const wxStatus = transferResult.status.toUpperCase();
+          
+          // 根据微信状态映射到我们的状态
+          if (wxStatus === 'SUCCESS') {
+            newStatus = 'SUCCESS';
+          } else if (wxStatus === 'FAIL' || wxStatus === 'FAILED') {
+            newStatus = 'FAILED';
+          } else if (['ACCEPTED', 'PROCESSING', 'TRANSFERING'].includes(wxStatus)) {
+            // 这些状态都认为是处理中
+            newStatus = 'PROCESSING';
+          }
+          
+          // 更新提现记录状态
+          if (newStatus !== 'PROCESSING') {
+            await withdrawRecord.update({
+              status: newStatus,
+              transfer_bill_no: transferResult.transferNo || null
+            });
+            logger.info(`提现记录状态根据接口返回更新为: ${newStatus}, 单号: ${outBillNo}`);
+          }
+        }
         
         // 返回结果，包含package_info用于拉起微信收款确认页面
         return {
@@ -154,7 +181,7 @@ class WithdrawService {
           billNo: outBillNo,
           transferNo: transferResult.transferNo,
           amount: 0.1, // 固定返回0.1元
-          status: "PROCESSING", // 状态保持为处理中，等待回调更新
+          status: newStatus, // 返回当前状态
           createTime: withdrawRecord.create_time,
           package_info: transferResult.package_info || null
         };
